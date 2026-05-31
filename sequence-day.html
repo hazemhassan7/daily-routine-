@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<meta name="theme-color" content="#efe7da" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+<meta name="apple-mobile-web-app-title" content="Sequence Day" />
+<title>Sequence Day</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,900&family=DM+Mono:wght@400;500&display=swap');
+
+:root{
+  --paper:#efe7da; --card:#fbf7ef; --ink:#1a1714; --accent:#e8513f;
+  --muted:#9a8c7e; --hair:#ddd0bd;
+  --pass-bg:#e8f3e8; --pass-bd:#5a9e5a; --pass-ink:#3d7a3d; --fail-bg:#fbe6e2;
+  --morn-bg:#fdeede; --morn-bd:#e0913a; --morn-ink:#c2701f;
+  --sleep-bg:#e7e9f5; --sleep-bd:#6b73b0; --sleep-ink:#4b5391;
+  --gold:#d9772e; --partial:#e0a93f;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{margin:0;padding:0;}
+body{
+  background:var(--paper); color:var(--ink);
+  font-family:'Fraunces',Georgia,serif;
+  padding:max(env(safe-area-inset-top),20px) 18px calc(env(safe-area-inset-bottom) + 24px);
+  min-height:100vh;
+}
+.wrap{max-width:600px;margin:0 auto;}
+
+/* sticky header */
+.head{
+  position:sticky; top:0; z-index:10;
+  background:var(--paper);
+  display:flex; justify-content:space-between; align-items:flex-start;
+  padding-top:8px; padding-bottom:14px;
+}
+.kicker{font-family:'DM Mono',monospace;font-size:11px;letter-spacing:3px;color:var(--accent);margin-bottom:4px;}
+.clock{font-size:52px;font-weight:900;line-height:.9;letter-spacing:-2px;}
+.clock .colon{color:var(--accent);}
+.sub{font-family:'DM Mono',monospace;font-size:12px;color:var(--muted);margin-top:8px;}
+.score{font-family:'DM Mono',monospace;font-size:12px;margin-top:8px;display:flex;gap:16px;}
+.score .p{color:var(--pass-ink);} .score .f{color:var(--accent);}
+.right{text-align:right;}
+.nextLabel{font-family:'DM Mono',monospace;font-size:10px;letter-spacing:2px;color:var(--muted);}
+.nextTime{font-family:'DM Mono',monospace;font-size:24px;margin:2px 0 8px;}
+.restNote{font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);margin:-4px 0 8px;}
+.ghost{font-family:'DM Mono',monospace;font-size:12px;background:var(--ink);border:none;color:var(--card);padding:8px 12px;border-radius:4px;cursor:pointer;}
+
+.notify{width:100%;text-align:left;font-family:'DM Mono',monospace;font-size:13px;padding:12px 14px;background:var(--card);border:1px dashed var(--accent);color:var(--ink);border-radius:6px;cursor:pointer;margin-bottom:18px;}
+
+.spine{display:flex;gap:3px;margin:6px 0 20px;}
+.spineSeg{flex:1;height:6px;border-radius:3px;background:#e4d8c6;transition:background .3s;}
+.spineSeg.pass{background:var(--pass-bd);}
+.spineSeg.fail{background:var(--accent);}
+.spineSeg.now{background:var(--ink);animation:pulse 1.8s ease-in-out infinite;}
+@keyframes pulse{0%,100%{opacity:1;}50%{opacity:.45;}}
+
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+.cell{border:1px solid var(--hair);border-radius:6px;padding:12px;min-height:84px;background:var(--card);transition:transform .2s,box-shadow .2s;}
+.cell .top{display:flex;justify-content:space-between;align-items:baseline;}
+.cell .num{font-size:22px;font-weight:900;}
+.cell .hr{font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);}
+.cell .tag{font-family:'DM Mono',monospace;font-size:9px;letter-spacing:1px;margin-top:6px;}
+.cell .glyph{font-size:28px;font-weight:900;margin-top:10px;line-height:1;}
+.cell .dots{color:#cabba8;font-size:14px;letter-spacing:1px;margin-top:18px;}
+.cell .count{font-family:'DM Mono',monospace;font-size:12px;color:var(--muted);margin-top:18px;}
+.cell.future{opacity:.55;}
+.cell.now{background:var(--ink);border-color:var(--ink);box-shadow:0 6px 18px rgba(26,23,20,.18);transform:scale(1.02);}
+.cell.now .num{color:#fff;} .cell.now .hr{color:rgba(255,255,255,.7);}
+.cell.now .dots{color:rgba(255,255,255,.5);} .cell.now .count{color:rgba(255,255,255,.9);} .cell.now .tag{color:rgba(255,255,255,.85);}
+.cell.pass{background:var(--pass-bg);border-color:var(--pass-bd);}
+.cell.fail{background:var(--fail-bg);border-color:var(--accent);}
+.cell.morn{background:var(--morn-bg);border-color:var(--morn-bd);}
+.cell.morn .num{color:var(--morn-ink);} .cell.morn .tag{color:var(--morn-ink);}
+.cell.sleep{background:var(--sleep-bg);border-color:var(--sleep-bd);}
+.cell.sleep .num{color:var(--sleep-ink);} .cell.sleep .tag{color:var(--sleep-ink);}
+
+.histBtn{width:100%;margin-top:24px;display:flex;justify-content:space-between;align-items:center;font-family:'DM Mono',monospace;font-size:15px;padding:14px 16px;background:var(--card);border:1px solid var(--hair);color:var(--ink);border-radius:6px;cursor:pointer;}
+.histBtn .streak{font-size:12px;color:var(--gold);}
+
+/* modal */
+.overlay{position:fixed;inset:0;background:rgba(26,23,20,.5);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;padding:18px;z-index:50;}
+.modal{background:var(--card);width:100%;max-width:460px;border-radius:12px;padding:24px;box-shadow:0 30px 60px rgba(0,0,0,.3);border:1px solid var(--hair);max-height:90vh;overflow-y:auto;animation:rise .4s cubic-bezier(.16,1,.3,1);}
+@keyframes rise{from{opacity:0;transform:translateY(18px);}to{opacity:1;transform:none;}}
+.steps{display:flex;align-items:center;gap:10px;margin-bottom:20px;}
+.stepDot{font-family:'DM Mono',monospace;font-size:11px;letter-spacing:1px;color:#b0a496;}
+.stepDot.on{color:var(--accent);}
+.stepLine{flex:1;height:1px;background:var(--hair);}
+.mTitle{font-size:24px;font-weight:900;letter-spacing:-1px;}
+.mSub{font-family:'DM Mono',monospace;font-size:12px;color:var(--muted);margin:4px 0 16px;}
+.mSub .warn{color:var(--accent);} .mSub .ok{color:var(--pass-ink);}
+.row{display:flex;align-items:center;gap:12px;padding:9px 0;border-bottom:1px solid #ece2d2;cursor:pointer;}
+.box{width:22px;height:22px;flex-shrink:0;border:2px solid var(--ink);border-radius:3px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:900;color:#fff;}
+.box.on{background:var(--accent);border-color:var(--accent);}
+.rowText{font-size:17px;}
+.rowText.strike{text-decoration:line-through;color:#b0a496;}
+.prog{font-family:'DM Mono',monospace;font-size:12px;color:var(--muted);margin:14px 0;text-align:right;}
+.planRow{display:flex;align-items:center;gap:10px;padding:7px 0;}
+.dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex-shrink:0;}
+.del{margin-left:auto;background:none;border:none;font-size:22px;color:#c4b8a8;cursor:pointer;line-height:1;}
+.inputRow{display:flex;gap:8px;margin-top:10px;}
+.input{flex:1;font-family:'Fraunces',serif;font-size:16px;padding:10px 12px;border:1px solid #ccc0ad;border-radius:6px;background:#fff;color:var(--ink);outline:none;}
+.add{font-family:'DM Mono',monospace;font-size:13px;padding:0 18px;background:var(--ink);color:var(--card);border:none;border-radius:6px;cursor:pointer;}
+.primary{width:100%;font-family:'DM Mono',monospace;font-size:14px;padding:13px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;letter-spacing:1px;margin-top:18px;}
+.btnRow{display:flex;gap:10px;margin-top:18px;}
+.back{font-family:'DM Mono',monospace;font-size:13px;padding:13px 18px;background:none;border:1px solid var(--ink);color:var(--ink);border-radius:6px;cursor:pointer;}
+.empty{color:var(--muted);font-style:italic;padding:8px 0 16px;}
+
+.dotGrid{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;margin-bottom:16px;}
+.dotCell{display:flex;flex-direction:column;align-items:center;gap:4px;}
+.dot2{width:26px;height:26px;border-radius:50%;}
+.dot2.today{box-shadow:0 0 0 2px var(--ink);}
+.dotLabel{font-family:'DM Mono',monospace;font-size:9px;color:var(--muted);}
+.dotScore{font-family:'DM Mono',monospace;font-size:9px;color:#b0a496;}
+.legend{display:flex;gap:16px;font-family:'DM Mono',monospace;font-size:10px;color:var(--muted);flex-wrap:wrap;}
+.legDot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+.histHead{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;}
+.histTitle{font-family:'DM Mono',monospace;font-size:11px;letter-spacing:3px;color:var(--muted);}
+.histStreak{font-family:'DM Mono',monospace;font-size:13px;color:var(--gold);}
+.hidden{display:none !important;}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="head">
+    <div>
+      <div class="kicker">THE 16-SEQUENCE DAY</div>
+      <div class="clock"><span id="ch">00</span><span class="colon">:</span><span id="cm">00</span></div>
+      <div class="sub" id="sub"></div>
+      <div class="score"><span class="p" id="passed">✓ 0 passed</span><span class="f" id="failed">✕ 0 failed</span></div>
+    </div>
+    <div class="right">
+      <div id="nextBox"></div>
+      <button class="ghost" id="checkinBtn">Check-in</button>
+    </div>
+  </header>
+
+  <button class="notify" id="notifyBtn">🔔 Enable notifications for the :50 check-in (keep this open)</button>
+
+  <div class="spine" id="spine"></div>
+  <div class="grid" id="grid"></div>
+
+  <button class="histBtn" id="histBtn">
+    <span>📅&nbsp;&nbsp;History</span>
+    <span class="streak" id="histStreakInline"></span>
+  </button>
+</div>
+
+<!-- check-in modal -->
+<div class="overlay hidden" id="checkinOverlay">
+  <div class="modal" id="checkinModal"></div>
+</div>
+
+<!-- history modal -->
+<div class="overlay hidden" id="histOverlay">
+  <div class="modal" id="histModal"></div>
+</div>
+
+<script>
+// ───────────────────────── config ─────────────────────────
+const TRIGGER_MINUTE = 50, DAY_START_HOUR = 9, TOTAL_SEQUENCES = 16;
+const STORE_KEY = "sequence-day-log";
+
+const pad = n => String(n).padStart(2,"0");
+const fmtHour = h => { const a=h>=12?"PM":"AM"; const hr=h%12===0?12:h%12; return hr+" "+a; };
+const seqForHour = h => { let d=h-DAY_START_HOUR; if(d<0)d+=24; return d<TOTAL_SEQUENCES?d+1:null; };
+const hourForSeq = s => (DAY_START_HOUR+(s-1))%24;
+const seqName = s => s===1?"Morning Routine":(s===TOTAL_SEQUENCES?"Sleep Routine":"Sequence "+s);
+function dateStamp(d){ const c=new Date(d); if(c.getHours()<DAY_START_HOUR) c.setDate(c.getDate()-1);
+  return c.getFullYear()+"-"+pad(c.getMonth()+1)+"-"+pad(c.getDate()); }
+const keyFor=(stamp,seq)=>stamp+"#"+seq;
+
+// ───────────────────────── storage ─────────────────────────
+let log = {};
+try { log = JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch(e){ log = {}; }
+function persist(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(log)); }catch(e){} }
+
+function statusOf(e){
+  if(!e) return "empty";
+  if(e.locked) return e.passed?"locked-pass":"locked-fail";
+  if(!e.planned || e.planned.length===0) return "empty";
+  return "open";
+}
+function lockPast(now){
+  const stamp=dateStamp(now); const curSeq=seqForHour(now.getHours()); let changed=false;
+  for(let seq=1;seq<=TOTAL_SEQUENCES;seq++){
+    const isPast = curSeq===null ? true : seq<curSeq;
+    if(!isPast) continue;
+    const k=keyFor(stamp,seq); const e=log[k];
+    if(!e) continue; if(e.locked) continue; if(!e.planned||e.planned.length===0) continue;
+    e.locked=true; e.passed=e.planned.every(t=>t.done); changed=true;
+  }
+  if(changed) persist();
+  return changed;
+}
+
+// ───────────────────────── state ─────────────────────────
+let now=new Date();
+let checkinOpen=false, histOpen=false, step=1, lastTriggered=null;
+let notifyOk = ("Notification" in window) && Notification.permission==="granted";
+
+// ───────────────────────── notifications + sound ─────────────────────────
+function beep(){
+  try{
+    const Ctx=window.AudioContext||window.webkitAudioContext; const ctx=new Ctx();
+    [0,.18,.36].forEach(t=>{ const o=ctx.createOscillator(),g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);o.frequency.value=880;o.type="sine";
+      g.gain.setValueAtTime(.0001,ctx.currentTime+t);
+      g.gain.exponentialRampToValueAtTime(.3,ctx.currentTime+t+.02);
+      g.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+t+.15);
+      o.start(ctx.currentTime+t);o.stop(ctx.currentTime+t+.16); });
+  }catch(e){}
+}
+function fireCheckin(seq){
+  step=1; checkinOpen=true; beep(); render();
+  if(notifyOk){ try{ new Notification(":50 — "+seqName(seq),
+    {body:"10 minutes to check off your tasks, or the hour fails."}); }catch(e){} }
+}
+document.getElementById("notifyBtn").onclick=async()=>{
+  if(!("Notification" in window)) return;
+  const p=await Notification.requestPermission(); notifyOk=(p==="granted"); render();
+};
+
+// ───────────────────────── history rollup ─────────────────────────
+function dayStats(){
+  const byDay={};
+  Object.keys(log).forEach(k=>{ const e=log[k]; if(!e.planned||e.planned.length===0) return;
+    const d=k.split("#")[0]; if(!byDay[d]) byDay[d]={pass:0,fail:0,planned:0};
+    byDay[d].planned++; if(e.locked){ e.passed?byDay[d].pass++:byDay[d].fail++; } });
+  return Object.keys(byDay).sort().map(d=>{ const s=byDay[d]; const scored=s.pass+s.fail;
+    return {date:d,...s,scored,rate:scored?s.pass/scored:0}; });
+}
+function computeStreak(){ const today=dateStamp(new Date());
+  const past=dayStats().filter(d=>d.date!==today&&d.scored>0); let n=0;
+  for(let i=past.length-1;i>=0;i--){ if(past[i].rate===1)n++; else break; } return n; }
+function dotColor(d){ if(d.scored===0)return "var(--hair)"; if(d.rate===1)return "var(--pass-bd)";
+  if(d.rate>=.5)return "var(--partial)"; return "var(--accent)"; }
+function fmtDayLabel(s){ const[y,m,dd]=s.split("-").map(Number);
+  return new Date(y,m-1,dd).toLocaleDateString(undefined,{month:"short",day:"numeric"}); }
+
+// ───────────────────────── render ─────────────────────────
+function render(){
+  const curHour=now.getHours(), curSeq=seqForHour(curHour);
+  const nextHour=(curHour+1)%24, nextSeq=seqForHour(nextHour);
+  const stamp=dateStamp(now);
+
+  // clock
+  document.getElementById("ch").textContent = curSeq?pad(curHour):"00";
+  document.getElementById("cm").textContent = curSeq?pad(now.getMinutes()):"00";
+  document.getElementById("sub").textContent = curSeq?(seqName(curSeq)+" · "+fmtHour(curHour)):"Day's done — showing today's board";
+
+  // score
+  let passed=0,failed=0;
+  for(let s=1;s<=TOTAL_SEQUENCES;s++){ const st=statusOf(log[keyFor(stamp,s)]);
+    if(st==="locked-pass")passed++; else if(st==="locked-fail")failed++; }
+  document.getElementById("passed").textContent="✓ "+passed+" passed";
+  document.getElementById("failed").textContent="✕ "+failed+" failed";
+
+  // next box
+  const nb=document.getElementById("nextBox");
+  let secs=(()=>{ const t=new Date(now); t.setMinutes(TRIGGER_MINUTE,0,0);
+    if(now.getMinutes()>=TRIGGER_MINUTE) t.setHours(t.getHours()+1);
+    return Math.max(0,Math.round((t-now)/1000)); })();
+  if(nextSeq&&curSeq){
+    nb.innerHTML='<div class="nextLabel">NEXT CHECK-IN</div><div class="nextTime">'+pad(Math.floor(secs/60))+":"+pad(secs%60)+'</div>';
+  } else if(curSeq){
+    nb.innerHTML='<div class="nextLabel">FINAL SEQUENCE</div><div class="nextTime" style="font-size:18px;color:var(--accent)">ends 1 AM</div>';
+  } else {
+    const t=new Date(now); t.setHours(DAY_START_HOUR,0,0,0); if(now.getHours()>=DAY_START_HOUR) t.setDate(t.getDate()+1);
+    const tot=Math.max(0,Math.round((t-now)/1000)); const h=Math.floor(tot/3600),m=Math.floor((tot%3600)/60);
+    nb.innerHTML='<div class="nextLabel">NEW DAY IN</div><div class="nextTime" style="font-size:20px">'+h+"h "+pad(m)+'m</div><div class="restNote">resets at 9 AM 🌙</div>';
+  }
+
+  // notify banner
+  document.getElementById("notifyBtn").classList.toggle("hidden", notifyOk);
+
+  // spine
+  const spine=document.getElementById("spine"); spine.innerHTML="";
+  for(let s=1;s<=TOTAL_SEQUENCES;s++){ const st=statusOf(log[keyFor(stamp,s)]);
+    const seg=document.createElement("span"); seg.className="spineSeg";
+    if(st==="locked-pass")seg.classList.add("pass");
+    else if(st==="locked-fail")seg.classList.add("fail");
+    else if(s===curSeq)seg.classList.add("now");
+    spine.appendChild(seg); }
+
+  // grid
+  const grid=document.getElementById("grid"); grid.innerHTML="";
+  for(let s=1;s<=TOTAL_SEQUENCES;s++){
+    const e=log[keyFor(stamp,s)]; const st=statusOf(e);
+    const isFirst=s===1,isLast=s===TOTAL_SEQUENCES,isBook=isFirst||isLast;
+    const unscored=st==="empty"||st==="open";
+    const isCur=s===curSeq, isFut=curSeq&&s>curSeq;
+    const cell=document.createElement("div"); cell.className="cell";
+    if(st==="locked-pass")cell.classList.add("pass");
+    else if(st==="locked-fail")cell.classList.add("fail");
+    else if(isBook&&unscored)cell.classList.add(isFirst?"morn":"sleep");
+    if(isFut)cell.classList.add("future");
+    if(isCur)cell.classList.add("now");
+
+    let inner='<div class="top"><span class="num">'+s+'</span><span class="hr">'+fmtHour(hourForSeq(s))+'</span></div>';
+    if(isBook&&unscored) inner+='<div class="tag">'+(isFirst?"MORNING":"SLEEP")+'</div>';
+    if(st==="locked-pass") inner+='<div class="glyph" style="color:var(--pass-ink)">✓</div>';
+    else if(st==="locked-fail") inner+='<div class="glyph" style="color:var(--accent)">✕</div>';
+    else { const items=(e&&e.planned)||[];
+      if(items.length===0) inner+='<div class="dots">·&nbsp;&nbsp;·&nbsp;&nbsp;·</div>';
+      else { const dn=items.filter(t=>t.done).length; inner+='<div class="count">'+dn+"/"+items.length+' done</div>'; } }
+    cell.innerHTML=inner;
+    grid.appendChild(cell);
+  }
+
+  // history inline streak
+  const streak=computeStreak();
+  document.getElementById("histStreakInline").textContent = streak>0?("🔥 "+streak+"-day streak"):"";
+
+  if(checkinOpen) renderCheckin(curSeq,nextSeq,curHour,nextHour,stamp);
+  document.getElementById("checkinOverlay").classList.toggle("hidden",!checkinOpen);
+
+  if(histOpen) renderHistory(stamp);
+  document.getElementById("histOverlay").classList.toggle("hidden",!histOpen);
+}
+
+// ───────────────────────── check-in modal ─────────────────────────
+function renderCheckin(curSeq,nextSeq,curHour,nextHour,stamp){
+  const m=document.getElementById("checkinModal");
+  const curE = curSeq?log[keyFor(stamp,curSeq)]:null;
+  const curTasks=(curE&&curE.planned)||[];
+  const curLocked=!!(curE&&curE.locked);
+  const nextK = nextSeq?keyFor(stamp,nextSeq):null;
+  const nextTasks=(nextK&&log[nextK]&&log[nextK].planned)||[];
+  const minute=now.getMinutes();
+  const minsLeft = minute>=TRIGGER_MINUTE ? 60-minute : null;
+
+  let h='<div class="steps"><span class="stepDot '+(step===1?"on":"")+'">1 · Review</span><span class="stepLine"></span><span class="stepDot '+(step===2?"on":"")+'">2 · Plan next</span></div>';
+
+  if(step===1){
+    h+='<div class="mTitle">Did you finish '+(curSeq?seqName(curSeq):"—")+'?</div>';
+    let sub=(curSeq?fmtHour(curHour):"Outside your day");
+    if(minsLeft!==null&&!curLocked) sub+=' · <span class="warn">'+minsLeft+' min left or it FAILS</span>';
+    if(curLocked) sub+=' · <span class="'+(curE.passed?"ok":"warn")+'">'+(curE.passed?"PASSED":"FAILED — locked")+'</span>';
+    h+='<div class="mSub">'+sub+'</div>';
+    if(curTasks.length===0) h+='<div class="empty">No tasks were planned for this sequence.</div>';
+    else curTasks.forEach((t,i)=>{ h+='<div class="row" data-toggle="'+i+'"><span class="box '+(t.done?"on":"")+'">'+(t.done?"✓":"")+'</span><span class="rowText '+(t.done?"strike":"")+'">'+escapeHtml(t.text)+'</span></div>'; });
+    if(curTasks.length>0){ const dn=curTasks.filter(t=>t.done).length; h+='<div class="prog">'+dn+" / "+curTasks.length+' checked</div>'; }
+    h+='<button class="primary" id="toStep2">'+(nextSeq?"Next: plan "+seqName(nextSeq):"Done")+'</button>';
+  } else {
+    h+='<div class="mTitle">'+(nextSeq?"Plan "+seqName(nextSeq):"Day complete")+'</div>';
+    h+='<div class="mSub">'+(nextSeq?fmtHour(nextHour):"Rest up 🌙")+'</div>';
+    if(nextSeq){
+      nextTasks.forEach((t,i)=>{ h+='<div class="planRow"><span class="dot"></span><span class="rowText">'+escapeHtml(t.text)+'</span><button class="del" data-remove="'+i+'">×</button></div>'; });
+      h+='<div class="inputRow"><input class="input" id="draft" placeholder="Add a task for next hour…" /><button class="add" id="addBtn">Add</button></div>';
+    } else h+='<div class="empty">End of your 16 sequences.</div>';
+    h+='<div class="btnRow"><button class="back" id="toStep1">← Back</button><button class="primary" style="margin-top:0" id="lockIn">Lock it in</button></div>';
+  }
+  m.innerHTML=h;
+
+  // wire events
+  m.querySelectorAll("[data-toggle]").forEach(el=>el.onclick=()=>{
+    if(!curSeq||curLocked) return; const i=+el.dataset.toggle;
+    const e=log[keyFor(stamp,curSeq)]; if(e&&!e.locked){ e.planned[i].done=!e.planned[i].done; persist(); render(); }
+  });
+  const s2=m.querySelector("#toStep2"); if(s2) s2.onclick=()=>{ step=2; render(); };
+  const s1=m.querySelector("#toStep1"); if(s1) s1.onclick=()=>{ step=1; render(); };
+  const lock=m.querySelector("#lockIn"); if(lock) lock.onclick=()=>{ checkinOpen=false; render(); };
+  const addBtn=m.querySelector("#addBtn"), draft=m.querySelector("#draft");
+  function addTask(){ const v=(draft.value||"").trim(); if(!v||!nextSeq) return;
+    const k=keyFor(stamp,nextSeq); if(!log[k])log[k]={planned:[],locked:false,passed:false};
+    log[k].planned.push({text:v,done:false}); persist(); render();
+    setTimeout(()=>{ const d=document.getElementById("draft"); if(d)d.focus(); },0); }
+  if(addBtn) addBtn.onclick=addTask;
+  if(draft) draft.onkeydown=e=>{ if(e.key==="Enter") addTask(); };
+  m.querySelectorAll("[data-remove]").forEach(el=>el.onclick=()=>{
+    if(!nextSeq) return; const i=+el.dataset.remove; const k=keyFor(stamp,nextSeq);
+    if(log[k]) log[k].planned.splice(i,1); persist(); render();
+  });
+}
+
+// ───────────────────────── history modal ─────────────────────────
+function renderHistory(stamp){
+  const m=document.getElementById("histModal"); const stats=dayStats(); const streak=computeStreak();
+  let h='<div class="histHead"><span class="histTitle">HISTORY</span>'+(streak>0?'<span class="histStreak">🔥 '+streak+'-day streak</span>':'')+'</div>';
+  if(stats.length===0){ h+='<div class="empty">No days recorded yet. Your first day will appear here once it\'s scored.</div>'; }
+  else {
+    h+='<div class="dotGrid">';
+    stats.forEach(d=>{ h+='<div class="dotCell"><span class="dot2 '+(d.date===stamp?"today":"")+'" style="background:'+dotColor(d)+'"></span><span class="dotLabel">'+fmtDayLabel(d.date)+'</span><span class="dotScore">'+d.pass+"/"+d.planned+'</span></div>'; });
+    h+='</div><div class="legend"><span><span class="legDot" style="background:var(--pass-bd)"></span>perfect</span><span><span class="legDot" style="background:var(--partial)"></span>partial</span><span><span class="legDot" style="background:var(--accent)"></span>failed</span></div>';
+  }
+  h+='<button class="primary" id="histClose">Close</button>';
+  m.innerHTML=h;
+  m.querySelector("#histClose").onclick=()=>{ histOpen=false; render(); };
+}
+
+function escapeHtml(s){ return s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+// ───────────────────────── wire static buttons ─────────────────────────
+document.getElementById("checkinBtn").onclick=()=>{ step=1; checkinOpen=true; render(); };
+document.getElementById("histBtn").onclick=()=>{ histOpen=true; render(); };
+document.getElementById("checkinOverlay").onclick=e=>{ if(e.target.id==="checkinOverlay"){ checkinOpen=false; render(); } };
+document.getElementById("histOverlay").onclick=e=>{ if(e.target.id==="histOverlay"){ histOpen=false; render(); } };
+
+// ───────────────────────── tick loop ─────────────────────────
+lockPast(new Date());
+setInterval(()=>{
+  now=new Date();
+  if(now.getMinutes()===TRIGGER_MINUTE && now.getSeconds()===0){
+    const seq=seqForHour(now.getHours());
+    if(seq){ const k=keyFor(dateStamp(now),seq); if(lastTriggered!==k){ lastTriggered=k; fireCheckin(seq); } }
+  }
+  if(now.getMinutes()===0 && now.getSeconds()===0) lockPast(now);
+  render();
+},1000);
+
+render();
+</script>
+</body>
+</html>
