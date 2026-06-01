@@ -200,6 +200,8 @@ function lockPast(now){
 // ───────────────────────── state ─────────────────────────
 let now=new Date();
 let checkinOpen=false, histOpen=false, step=1, lastTriggered=null;
+let planOnly=false; // when true, the check-in modal shows ONLY the plan step (used for the 9:00 Morning plan)
+let lastMorning=null; // tracks the day we've already fired the 9:00 morning popup for
 let notifyOk = ("Notification" in window) && Notification.permission==="granted";
 
 // ───────────────────────── notifications + sound ─────────────────────────
@@ -215,9 +217,15 @@ function beep(){
   }catch(e){}
 }
 function fireCheckin(seq){
-  step=1; checkinOpen=true; beep(); render();
+  step=1; planOnly=false; checkinOpen=true; beep(); render();
   if(notifyOk){ try{ new Notification(":50 — "+seqName(seq),
     {body:"10 minutes to check off your tasks, or the hour fails."}); }catch(e){} }
+}
+function fireMorning(){
+  // 9:00 — plan Morning's tasks only (no review). Reuses the modal in plan-only mode.
+  step=2; planOnly=true; checkinOpen=true; beep(); render();
+  if(notifyOk){ try{ new Notification("9:00 — Plan your Morning",
+    {body:"Type your Morning Routine tasks to start the day."}); }catch(e){} }
 }
 document.getElementById("notifyBtn").onclick=async()=>{
   if(!("Notification" in window)) return;
@@ -325,6 +333,32 @@ function render(){
 // ───────────────────────── check-in modal ─────────────────────────
 function renderCheckin(curSeq,nextSeq,curHour,nextHour,stamp){
   const m=document.getElementById("checkinModal");
+
+  // ── plan-only mode: 9:00 Morning planning, no review, targets sequence 1 ──
+  if(planOnly){
+    const mornK=keyFor(stamp,1);
+    const mornTasks=(log[mornK]&&log[mornK].planned)||[];
+    let ph='<div class="histHead"><span class="histTitle">9:00 · PLAN YOUR MORNING</span></div>';
+    ph+='<div class="mTitle">Plan Morning Routine</div>';
+    ph+='<div class="mSub">'+fmtHour(hourForSeq(1))+' · type your tasks for the day\'s start</div>';
+    mornTasks.forEach((t,i)=>{ ph+='<div class="planRow"><span class="dot"></span><span class="rowText">'+escapeHtml(t.text)+'</span><button class="del" data-mremove="'+i+'">×</button></div>'; });
+    ph+='<div class="inputRow"><input class="input" id="mdraft" placeholder="Add a Morning task…" /><button class="add" id="maddBtn">Add</button></div>';
+    ph+='<button class="primary" id="mDone">Done</button>';
+    m.innerHTML=ph;
+    const md=m.querySelector("#mdraft"), mb=m.querySelector("#maddBtn");
+    function addM(){ const v=(md.value||"").trim(); if(!v)return;
+      if(!log[mornK])log[mornK]={planned:[],locked:false,passed:false};
+      log[mornK].planned.push({text:v,done:false}); persist(); render();
+      setTimeout(()=>{ const a=document.getElementById("mdraft"); if(a)a.focus(); },0); }
+    if(mb) mb.onclick=addM;
+    if(md) md.onkeydown=e=>{ if(e.key==="Enter") addM(); };
+    m.querySelectorAll("[data-mremove]").forEach(el=>el.onclick=()=>{
+      const i=+el.dataset.mremove; if(log[mornK]) log[mornK].planned.splice(i,1); persist(); render();
+    });
+    m.querySelector("#mDone").onclick=()=>{ checkinOpen=false; planOnly=false; render(); };
+    return;
+  }
+
   const curE = curSeq?log[keyFor(stamp,curSeq)]:null;
   const curTasks=(curE&&curE.planned)||[];
   const curLocked=!!(curE&&curE.locked);
@@ -377,7 +411,7 @@ function renderCheckin(curSeq,nextSeq,curHour,nextHour,stamp){
   });
 }
 
-// ───────────────────────── history modal ─────────────────────────
+
 function renderHistory(stamp){
   const m=document.getElementById("histModal"); const stats=dayStats(); const streak=computeStreak();
   let h='<div class="histHead"><span class="histTitle">HISTORY</span>'+(streak>0?'<span class="histStreak">🔥 '+streak+'-day streak</span>':'')+'</div>';
@@ -395,7 +429,14 @@ function renderHistory(stamp){
 function escapeHtml(s){ return s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
 // ───────────────────────── wire static buttons ─────────────────────────
-document.getElementById("checkinBtn").onclick=()=>{ step=1; checkinOpen=true; render(); };
+document.getElementById("checkinBtn").onclick=()=>{
+  const stampNow=dateStamp(now); const cs=seqForHour(now.getHours());
+  const mornE=log[keyFor(stampNow,1)];
+  // If we're in Morning and it isn't locked yet, open Morning planning instead of review
+  if(cs===1 && !(mornE&&mornE.locked)){ planOnly=true; }
+  else { step=1; planOnly=false; }
+  checkinOpen=true; render();
+};
 document.getElementById("histBtn").onclick=()=>{ histOpen=true; render(); };
 document.getElementById("checkinOverlay").onclick=e=>{ if(e.target.id==="checkinOverlay"){ checkinOpen=false; render(); } };
 document.getElementById("histOverlay").onclick=e=>{ if(e.target.id==="histOverlay"){ histOpen=false; render(); } };
@@ -404,6 +445,11 @@ document.getElementById("histOverlay").onclick=e=>{ if(e.target.id==="histOverla
 lockPast(new Date());
 setInterval(()=>{
   now=new Date();
+  // 9:00 sharp — open Morning planning (once per day)
+  if(now.getHours()===DAY_START_HOUR && now.getMinutes()===0 && now.getSeconds()===0){
+    const dk=dateStamp(now);
+    if(lastMorning!==dk){ lastMorning=dk; fireMorning(); }
+  }
   if(now.getMinutes()===TRIGGER_MINUTE && now.getSeconds()===0){
     const seq=seqForHour(now.getHours());
     if(seq){ const k=keyFor(dateStamp(now),seq); if(lastTriggered!==k){ lastTriggered=k; fireCheckin(seq); } }
