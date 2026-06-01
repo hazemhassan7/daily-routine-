@@ -121,6 +121,15 @@ body{
 .histTitle{font-family:'DM Mono',monospace;font-size:11px;letter-spacing:3px;color:var(--muted);}
 .histStreak{font-family:'DM Mono',monospace;font-size:13px;color:var(--gold);}
 .hidden{display:none !important;}
+.reckoning{position:fixed;inset:0;background:#0d0b0a;display:flex;align-items:center;justify-content:center;padding:28px;z-index:100;animation:fadeIn .5s ease;}
+@keyframes fadeIn{from{opacity:0;}to{opacity:1;}}
+.reckInner{max-width:460px;}
+.reckHead{font-family:'Fraunces',serif;font-size:38px;font-weight:900;letter-spacing:-1px;color:var(--accent);margin-bottom:24px;line-height:1;}
+.reckBody{font-family:'Fraunces',serif;font-size:18px;line-height:1.5;color:#e8ded0;}
+.reckBody em{color:#fff;font-style:italic;}
+.reckBtn{margin-top:32px;width:100%;font-family:'DM Mono',monospace;font-size:14px;padding:15px;background:transparent;color:#9a8c7e;border:1px solid #3a342e;border-radius:6px;cursor:pointer;letter-spacing:1px;transition:opacity .3s;}
+.reckBtn.ready{color:#fff;border-color:var(--accent);}
+.reckBtn:disabled{opacity:.4;}
 </style>
 </head>
 <body>
@@ -159,6 +168,19 @@ body{
   <div class="modal" id="histModal"></div>
 </div>
 
+<!-- reckoning: day closed after 3 fails in a row -->
+<div class="reckoning hidden" id="reckoning">
+  <div class="reckInner">
+    <div class="reckHead">THREE IN A ROW.</div>
+    <div class="reckBody">
+      The day is closed. Every hour left is a loss now — that's on you.<br/><br/>
+      This is the exact pattern that keeps people stuck: not the failing, the <em>quitting after failing</em>.<br/><br/>
+      You don't get this day back. Tomorrow at 9:00, prove this was the floor, not the trend.
+    </div>
+    <button class="reckBtn" id="reckBtn">I accept the day is lost</button>
+  </div>
+</div>
+
 <script>
 // ───────────────────────── config ─────────────────────────
 const TRIGGER_MINUTE = 50, DAY_START_HOUR = 9, TOTAL_SEQUENCES = 16;
@@ -167,6 +189,183 @@ const STORE_KEY = "sequence-day-log";
 const pad = n => String(n).padStart(2,"0");
 const fmtHour = h => { const a=h>=12?"PM":"AM"; const hr=h%12===0?12:h%12; return hr+" "+a; };
 const seqForHour = h => { let d=h-DAY_START_HOUR; if(d<0)d+=24; return d<TOTAL_SEQUENCES?d+1:null; };
+const hourForSeq = s => (DAY_START_HOUR+(s-1))%24;
+const seqName = s => s===1?"Morning Routine":(s===TOTAL_SEQUENCES?"Sleep Routine":"Sequence "+s);
+function dateStamp(d){ const c=new Date(d); if(c.getHours()<DAY_START_HOUR) c.setDate(c.getDate()-1);
+  return c.getFullYear()+"-"+pad(c.getMonth()+1)+"-"+pad(c.getDate()); }
+const keyFor=(stamp,seq)=>stamp+"#"+seq;
+
+// ───────────────────────── storage ─────────────────────────
+let log = {};
+try { log = JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch(e){ log = {}; }
+function persist(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(log)); }catch(e){} }
+
+function statusOf(e){
+  if(!e) return "empty";
+  if(e.locked) return e.passed?"locked-pass":"locked-fail";
+  if(!e.planned || e.planned.length===0) return "empty";
+  return "open";
+}
+function dayClosedKey(stamp){ return stamp+"#closed"; }
+function isDayClosed(stamp){ return !!log[dayClosedKey(stamp)]; }
+
+function lockPast(now){
+  const stamp=dateStamp(now); const curSeq=seqForHour(now.getHours()); let changed=false;
+  for(let seq=1;seq<=TOTAL_SEQUENCES;seq++){
+    const isPast = curSeq===null ? true : seq<curSeq;
+    if(!isPast) continue;
+    const k=keyFor(stamp,seq); const e=log[k];
+    if(!e) continue; if(e.locked) continue; if(!e.planned||e.planned.length===0) continue;
+    e.locked=true; e.passed=e.planned.every(t=>t.done); changed=true;
+  }
+  if(changed) persist();
+  // after locking, check for 3 failed-in-a-row → close the day
+  if(!isDayClosed(stamp) && checkThreeStrikes(stamp,curSeq)){
+    closeDay(stamp,curSeq);
+    changed=true;
+  }
+  return changed;
+}
+
+// 3 consecutive locked-fail sequences (ignoring empty/unplanned hours between)
+function checkThreeStrikes(stamp,curSeq){
+  let run=0;
+  const upTo = curSeq===null ? TOTAL_SEQUENCES : curSeq-1;
+  for(let seq=1;seq<=upTo;seq++){
+    const e=log[keyFor(stamp,seq)];
+    const st=statusOf(e);
+    if(st==="locked-fail"){ run++; if(run>=3) return true; }
+    else if(st==="locked-pass"){ run=0; }
+    // empty/open hours don't break or build the streak
+  }
+  return false;
+}
+
+// close the day: every remaining sequence becomes a locked fail, flag the day, trigger reckoning
+function closeDay(stamp,curSeq){
+  for(let seq=1;seq<=TOTAL_SEQUENCES;seq++){
+    const k=keyFor(stamp,seq); const e=log[k];
+    if(e && e.locked) continue; // keep already-scored hours
+    // remaining hours (including current and future) become failed
+    log[k]={planned:(e&&e.planned)||[],locked:true,passed:false,closedFail:true};
+  }
+  log[dayClosedKey(stamp)]=true;
+  persist();
+  reckoningOpen=true;
+}
+
+// ───────────────────────── state ─────────────────────────
+let now=new Date();
+let checkinOpen=false, histOpen=false, step=1, lastTriggered=null;
+let planOnly=false; // when true, the check-in modal shows ONLY the plan step (used for the 9:00 Morning plan)
+let reckoningOpen=false; // the 3-strike day-closed screen
+let lastMorning=null; // tracks the day we've already fired the 9:00 morning popup for
+let modalDirty=true; // when true, the open modal needs a full rebuild; ticks alone won't rebuild it
+let notifyOk = ("Notification" in window) && Notification.permission==="granted";
+
+// ───────────────────────── notifications + sound ─────────────────────────
+function beep(){
+  try{
+    const Ctx=window.AudioContext||window.webkitAudioContext; const ctx=new Ctx();
+    [0,.18,.36].forEach(t=>{ const o=ctx.createOscillator(),g=ctx.createGain();
+      o.connect(g);g.connect(ctx.destination);o.frequency.value=880;o.type="sine";
+      g.gain.setValueAtTime(.0001,ctx.currentTime+t);
+      g.gain.exponentialRampToValueAtTime(.3,ctx.currentTime+t+.02);
+      g.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+t+.15);
+      o.start(ctx.currentTime+t);o.stop(ctx.currentTime+t+.16); });
+  }catch(e){}
+}
+function fireCheckin(seq){
+  step=1; planOnly=false; checkinOpen=true; modalDirty=true; beep(); render();
+  if(notifyOk){ try{ new Notification(":50 — "+seqName(seq),
+    {body:"10 minutes to check off your tasks, or the hour fails."}); }catch(e){} }
+}
+function fireMorning(){
+  // 9:00 — plan Morning's tasks only (no review). Reuses the modal in plan-only mode.
+  step=2; planOnly=true; checkinOpen=true; modalDirty=true; beep(); render();
+  if(notifyOk){ try{ new Notification("9:00 — Plan your Morning",
+    {body:"Type your Morning Routine tasks to start the day."}); }catch(e){} }
+}
+document.getElementById("notifyBtn").onclick=async()=>{
+  if(!("Notification" in window)) return;
+  const p=await Notification.requestPermission(); notifyOk=(p==="granted"); render();
+};
+
+// ───────────────────────── history rollup ─────────────────────────
+function dayStats(){
+  const byDay={};
+  Object.keys(log).forEach(k=>{
+    if(k.endsWith("#closed")) return; // skip the day-closed marker
+    const e=log[k];
+    const hasTasks = e.planned && e.planned.length>0;
+    const isClosedFail = e.closedFail===true;
+    if(!hasTasks && !isClosedFail) return;
+    const d=k.split("#")[0]; if(!byDay[d]) byDay[d]={pass:0,fail:0,planned:0};
+    byDay[d].planned++;
+    if(e.locked){ e.passed?byDay[d].pass++:byDay[d].fail++; }
+  });
+  return Object.keys(byDay).sort().map(d=>{ const s=byDay[d]; const scored=s.pass+s.fail;
+    return {date:d,...s,scored,rate:scored?s.pass/scored:0}; });
+}
+function computeStreak(){ const today=dateStamp(new Date());
+  const past=dayStats().filter(d=>d.date!==today&&d.scored>0); let n=0;
+  for(let i=past.length-1;i>=0;i--){ if(past[i].rate===1)n++; else break; } return n; }
+function dotColor(d){ if(d.scored===0)return "var(--hair)"; if(d.rate===1)return "var(--pass-bd)";
+  if(d.rate>=.5)return "var(--partial)"; return "var(--accent)"; }
+function fmtDayLabel(s){ const[y,m,dd]=s.split("-").map(Number);
+  return new Date(y,m-1,dd).toLocaleDateString(undefined,{month:"short",day:"numeric"}); }
+
+// ───────────────────────── render ─────────────────────────
+function render(){
+  const curHour=now.getHours(), curSeq=seqForHour(curHour);
+  const nextHour=(curHour+1)%24, nextSeq=seqForHour(nextHour);
+  const stamp=dateStamp(now);
+
+  // clock
+  document.getElementById("ch").textContent = curSeq?pad(curHour):"00";
+  document.getElementById("cm").textContent = curSeq?pad(now.getMinutes()):"00";
+  document.getElementById("sub").textContent = curSeq?(seqName(curSeq)+" · "+fmtHour(curHour)):"Day's done — showing today's board";
+
+  // score
+  let passed=0,failed=0;
+  for(let s=1;s<=TOTAL_SEQUENCES;s++){ const st=statusOf(log[keyFor(stamp,s)]);
+    if(st==="locked-pass")passed++; else if(st==="locked-fail")failed++; }
+  document.getElementById("passed").textContent="✓ "+passed+" passed";
+  document.getElementById("failed").textContent="✕ "+failed+" failed";
+
+  // next box
+  const nb=document.getElementById("nextBox");
+  let secs=(()=>{ const t=new Date(now); t.setMinutes(TRIGGER_MINUTE,0,0);
+    if(now.getMinutes()>=TRIGGER_MINUTE) t.setHours(t.getHours()+1);
+    return Math.max(0,Math.round((t-now)/1000)); })();
+  if(nextSeq&&curSeq){
+    nb.innerHTML='<div class="nextLabel">NEXT CHECK-IN</div><div class="nextTime">'+pad(Math.floor(secs/60))+":"+pad(secs%60)+'</div>';
+  } else if(curSeq){
+    nb.innerHTML='<div class="nextLabel">FINAL SEQUENCE</div><div class="nextTime" style="font-size:18px;color:var(--accent)">ends 1 AM</div>';
+  } else {
+    const t=new Date(now); t.setHours(DAY_START_HOUR,0,0,0); if(now.getHours()>=DAY_START_HOUR) t.setDate(t.getDate()+1);
+    const tot=Math.max(0,Math.round((t-now)/1000)); const h=Math.floor(tot/3600),m=Math.floor((tot%3600)/60);
+    nb.innerHTML='<div class="nextLabel">NEW DAY IN</div><div class="nextTime" style="font-size:20px">'+h+"h "+pad(m)+'m</div><div class="restNote">resets at 9 AM 🌙</div>';
+  }
+
+  // notify banner
+  document.getElementById("notifyBtn").classList.toggle("hidden", notifyOk);
+
+  // spine
+  const spine=document.getElementById("spine"); spine.innerHTML="";
+  for(let s=1;s<=TOTAL_SEQUENCES;s++){ const st=statusOf(log[keyFor(stamp,s)]);
+    const seg=document.createElement("span"); seg.className="spineSeg";
+    if(st==="locked-pass")seg.classList.add("pass");
+    else if(st==="locked-fail")seg.classList.add("fail");
+    else if(s===curSeq)seg.classList.add("now");
+    spine.appendChild(seg); }
+
+  // grid
+  const grid=document.getElementById("grid"); grid.innerHTML="";
+  for(let s=1;s<=TOTAL_SEQUENCES;s++){
+    const e=log[keyFor(stamp,s)]; const st=statusOf(e);
+    const isFirst=s===1,isLast=s===TOTAL_SEQUENCES,isBook=isFirst||isLast;
+    const unscored=st==="em let d=h-DAY_START_HOUR; if(d<0)d+=24; return d<TOTAL_SEQUENCES?d+1:null; };
 const hourForSeq = s => (DAY_START_HOUR+(s-1))%24;
 const seqName = s => s===1?"Morning Routine":(s===TOTAL_SEQUENCES?"Sleep Routine":"Sequence "+s);
 function dateStamp(d){ const c=new Date(d); if(c.getHours()<DAY_START_HOUR) c.setDate(c.getDate()-1);
