@@ -155,10 +155,20 @@ body{
   <div class="spine" id="spine"></div>
   <div class="grid" id="grid"></div>
 
+  <button class="histBtn" id="dailyBtn" style="margin-top:18px;">
+    <span>🔁&nbsp;&nbsp;Daily Tasks</span>
+    <span class="streak" style="color:var(--muted);">recurring</span>
+  </button>
+
   <button class="histBtn" id="histBtn">
     <span>📅&nbsp;&nbsp;History</span>
     <span class="streak" id="histStreakInline"></span>
   </button>
+</div>
+
+<!-- daily-tasks (recurring template) modal -->
+<div class="overlay hidden" id="dailyOverlay">
+  <div class="modal" id="dailyModal"></div>
 </div>
 
 <!-- check-in modal -->
@@ -174,9 +184,9 @@ body{
 <!-- reckoning: day closed after 3 fails in a row -->
 <div class="reckoning hidden" id="reckoning">
   <div class="reckInner">
-    <div class="reckHead">THREE IN A ROW.</div>
+    <div class="reckHead">DAY CLOSED.</div>
     <div class="reckBody">
-      The day is closed. Every hour left is a loss now — that's on you.<br/><br/>
+      Two in a row, or three across the day — either way, it's done. Every hour left is a loss now.<br/><br/>
       This is the exact pattern that keeps people stuck: not the failing, the <em>quitting after failing</em>.<br/><br/>
       You don't get this day back. Tomorrow at 9:00, prove this was the floor, not the trend.
     </div>
@@ -213,11 +223,47 @@ let log = {};
 try { log = JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch(e){ log = {}; }
 function persist(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(log)); }catch(e){} }
 
+// recurring daily tasks template: { "1":["Prayer","Azkar Sabah"], "9":["Azkar Masaa"], ... }
+const TEMPLATE_KEY = "sequence-day-template";
+let template = {};
+try { template = JSON.parse(localStorage.getItem(TEMPLATE_KEY) || "{}"); } catch(e){ template = {}; }
+function persistTemplate(){ try{ localStorage.setItem(TEMPLATE_KEY, JSON.stringify(template)); }catch(e){} }
+
+// Seed recurring tasks into a given day's sequences (only ones not already seeded, and not locked).
+// Marks each seeded task with recurring:true so we can tell them apart.
+function seedRecurring(stamp){
+  let changed=false;
+  for(const seqStr in template){
+    const seq=+seqStr; const tasks=template[seqStr]||[];
+    if(tasks.length===0) continue;
+    const k=keyFor(stamp,seq); let e=log[k];
+    if(e && e.locked) continue; // don't touch a locked hour
+    if(!e){ e={planned:[],locked:false,passed:false}; log[k]=e; }
+    tasks.forEach(txt=>{
+      // avoid duplicating a recurring task already present
+      const exists=e.planned.some(t=>t.recurring && t.text===txt);
+      if(!exists){ e.planned.push({text:txt,done:false,recurring:true}); changed=true; }
+    });
+  }
+  if(changed) persist();
+  return changed;
+}
+
 function statusOf(e){
   if(!e) return "empty";
   if(e.locked) return e.passed?"locked-pass":"locked-fail";
   if(!e.planned || e.planned.length===0) return "empty";
   return "open";
+}
+
+// Does a sequence count as "planned" (won't empty-fail)?
+//  - seq 1 & 16 (special): any task counts, including recurring-only
+//  - seq 2..15: needs at least one MANUAL (non-recurring) task
+function isPlanned(seq, e){
+  const items=(e&&e.planned)||[];
+  if(items.length===0) return false;
+  if(seq===1 || seq===TOTAL_SEQUENCES) return true; // special: recurring alone is enough
+  return items.some(t=>!t.recurring); // normal hours need a manual task
 }
 function dayClosedKey(stamp){ return stamp+"#closed"; }
 function isDayClosed(stamp){ return !!log[dayClosedKey(stamp)]; }
@@ -230,9 +276,10 @@ function lockPast(now){
     const k=keyFor(stamp,seq); const e=log[k];
     if(e && e.locked) continue;
     const planned=(e&&e.planned)||[];
-    if(planned.length===0){
-      // never planned → empty fail (black label), counts as a real fail
-      log[k]={planned:[],locked:true,passed:false,emptyFail:true};
+    if(!isPlanned(seq,e)){
+      // not properly planned → empty fail (black label), counts as a real fail.
+      // keep any recurring tasks that were sitting there, but the hour is failed.
+      log[k]={planned:planned,locked:true,passed:false,emptyFail:true};
     } else {
       e.locked=true; e.passed=planned.every(t=>t.done);
     }
@@ -242,30 +289,34 @@ function lockPast(now){
   if(curSeq===1){
     const past910 = now.getHours()===DAY_START_HOUR && now.getMinutes()>=11;
     const k=keyFor(stamp,1); const e=log[k];
-    if(past910 && !(e&&e.locked) && !((e&&e.planned)||[]).length){
-      log[k]={planned:[],locked:true,passed:false,emptyFail:true};
+    if(past910 && !(e&&e.locked) && !isPlanned(1,e)){
+      log[k]={planned:(e&&e.planned)||[],locked:true,passed:false,emptyFail:true};
       changed=true;
     }
   }
   if(changed) persist();
-  // after locking, check for 3 failed-in-a-row → close the day
-  if(!isDayClosed(stamp) && checkThreeStrikes(stamp,curSeq)){
+  // after locking, check the day-closing triggers
+  if(!isDayClosed(stamp) && checkDayClose(stamp,curSeq)){
     closeDay(stamp,curSeq);
     changed=true;
   }
   return changed;
 }
 
-// 3 consecutive locked-fail sequences (ignoring empty/unplanned hours between)
-function checkThreeStrikes(stamp,curSeq){
-  let run=0;
+// Day closes if EITHER: 2 fails in a row, OR 3 fails total. Empty-fails count.
+function checkDayClose(stamp,curSeq){
+  let run=0, total=0;
   const upTo = curSeq===null ? TOTAL_SEQUENCES : curSeq-1;
   for(let seq=1;seq<=upTo;seq++){
-    const e=log[keyFor(stamp,seq)];
-    const st=statusOf(e);
-    if(st==="locked-fail"){ run++; if(run>=3) return true; }
-    else if(st==="locked-pass"){ run=0; }
-    // empty/open hours don't break or build the streak
+    const st=statusOf(log[keyFor(stamp,seq)]);
+    if(st==="locked-fail"){
+      run++; total++;
+      if(run>=2) return true;   // 2 in a row
+      if(total>=3) return true;  // 3 overall
+    } else if(st==="locked-pass"){
+      run=0; // a pass breaks the consecutive run, but total fails stay counted
+    }
+    // empty/open (un-arrived) hours don't affect counts
   }
   return false;
 }
@@ -288,6 +339,7 @@ let now=new Date();
 let checkinOpen=false, histOpen=false, step=1, lastTriggered=null;
 let planOnly=false; // when true, the check-in modal shows ONLY the plan step (used for the 9:00 Morning plan)
 let reckoningOpen=false; // the 3-strike day-closed screen
+let dailyOpen=false; // recurring daily-tasks template editor
 let lastMorning=null; // tracks the day we've already fired the 9:00 morning popup for
 let modalDirty=true; // when true, the open modal needs a full rebuild; ticks alone won't rebuild it
 let notifyOk = ("Notification" in window) && Notification.permission==="granted";
@@ -440,6 +492,9 @@ function render(){
   if(histOpen){ if(modalDirty) renderHistory(stamp); }
   document.getElementById("histOverlay").classList.toggle("hidden",!histOpen);
 
+  if(dailyOpen){ if(modalDirty) renderDaily(); }
+  document.getElementById("dailyOverlay").classList.toggle("hidden",!dailyOpen);
+
   modalDirty=false;
 }
 
@@ -544,6 +599,49 @@ function renderHistory(stamp){
 
 function escapeHtml(s){ return s.replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
 
+// ───────────────────────── daily-tasks (recurring) editor ─────────────────────────
+function renderDaily(){
+  const m=document.getElementById("dailyModal");
+  let h='<div class="histHead"><span class="histTitle">DAILY TASKS</span></div>';
+  h+='<div class="mSub" style="margin-top:-8px">Recurring tasks auto-appear every day. For hours 2–15 you still must add a manual task at :50 — only Morning &amp; Sleep are satisfied by recurring alone.</div>';
+  for(let seq=1;seq<=TOTAL_SEQUENCES;seq++){
+    const tasks=template[String(seq)]||[];
+    const special = (seq===1||seq===TOTAL_SEQUENCES);
+    h+='<div style="margin-bottom:14px;">';
+    h+='<div style="font-weight:600;font-size:14px;margin-bottom:5px;">'+seqName(seq)+' <span style="color:var(--muted);font-weight:400;font-size:11px;">'+fmtHour(hourForSeq(seq))+(special?' · counts as planned':'')+'</span></div>';
+    tasks.forEach((t,i)=>{ h+='<div class="planRow"><span class="dot"></span><span class="rowText" style="font-size:15px">'+escapeHtml(t)+'</span><button class="del" data-ddel="'+seq+'_'+i+'">×</button></div>'; });
+    h+='<div class="inputRow"><input class="input" id="ddraft_'+seq+'" placeholder="Add recurring task…" style="font-size:15px;padding:8px 10px" /><button class="add" data-dadd="'+seq+'">＋</button></div>';
+    h+='</div>';
+  }
+  h+='<button class="primary" id="dailyDone">Done</button>';
+  m.innerHTML=h;
+
+  m.querySelectorAll("[data-dadd]").forEach(btn=>{
+    const seq=+btn.dataset.dadd; const inp=m.querySelector("#ddraft_"+seq);
+    const addit=()=>{ const v=(inp.value||"").trim(); if(!v)return;
+      if(!template[String(seq)])template[String(seq)]=[];
+      template[String(seq)].push(v); persistTemplate();
+      // also drop it into today's live cell immediately if that hour isn't locked
+      const stamp=dateStamp(now); const k=keyFor(stamp,seq); const e=log[k];
+      if(!(e&&e.locked)){ if(!log[k])log[k]={planned:[],locked:false,passed:false};
+        if(!log[k].planned.some(t=>t.recurring&&t.text===v)) log[k].planned.push({text:v,done:false,recurring:true}); persist(); }
+      modalDirty=true; render();
+      setTimeout(()=>{ const a=document.getElementById("ddraft_"+seq); if(a)a.focus(); },0); };
+    btn.onclick=addit; if(inp) inp.onkeydown=ev=>{ if(ev.key==="Enter") addit(); };
+  });
+  m.querySelectorAll("[data-ddel]").forEach(btn=>btn.onclick=()=>{
+    const [seq,i]=btn.dataset.ddel.split("_").map(Number);
+    const arr=template[String(seq)]||[]; const removed=arr[i];
+    arr.splice(i,1); if(arr.length===0) delete template[String(seq)]; persistTemplate();
+    // remove that recurring task from today's cell too, if present and not locked
+    const stamp=dateStamp(now); const k=keyFor(stamp,seq); const e=log[k];
+    if(e && !e.locked){ e.planned=e.planned.filter(t=>!(t.recurring&&t.text===removed)); persist(); }
+    modalDirty=true; render();
+  });
+  m.querySelector("#dailyDone").onclick=()=>{ dailyOpen=false; render(); };
+}
+
+
 // ───────────────────────── wire static buttons ─────────────────────────
 document.getElementById("checkinBtn").onclick=()=>{
   const stampNow=dateStamp(now); const cs=seqForHour(now.getHours());
@@ -554,8 +652,10 @@ document.getElementById("checkinBtn").onclick=()=>{
   checkinOpen=true; modalDirty=true; render();
 };
 document.getElementById("histBtn").onclick=()=>{ histOpen=true; modalDirty=true; render(); };
+document.getElementById("dailyBtn").onclick=()=>{ dailyOpen=true; modalDirty=true; render(); };
 document.getElementById("checkinOverlay").onclick=e=>{ if(e.target.id==="checkinOverlay"){ checkinOpen=false; render(); } };
 document.getElementById("histOverlay").onclick=e=>{ if(e.target.id==="histOverlay"){ histOpen=false; render(); } };
+document.getElementById("dailyOverlay").onclick=e=>{ if(e.target.id==="dailyOverlay"){ dailyOpen=false; render(); } };
 
 // reckoning button: locked for 5s so you have to sit with it, then dismisses
 let reckTimer=null;
@@ -572,17 +672,21 @@ document.getElementById("reckBtn").onclick=()=>{ if(document.getElementById("rec
   reckoningOpen=false; render(); };
 
 // ───────────────────────── tick loop ─────────────────────────
+seedRecurring(dateStamp(new Date())); // plant today's recurring tasks on load
 lockPast(new Date());
 // if today is already closed (e.g. reopening the app), confront the reckoning on load
 if(isDayClosed(dateStamp(new Date()))) reckoningOpen=true;
+let seededDay=dateStamp(new Date());
 setInterval(()=>{
   now=new Date();
   const stampNow=dateStamp(now);
   const dayClosed=isDayClosed(stampNow);
+  // when a new day begins, seed its recurring tasks
+  if(stampNow!==seededDay){ seededDay=stampNow; seedRecurring(stampNow); }
   // 9:00 sharp — open Morning planning (once per day), unless day already closed
   if(!dayClosed && now.getHours()===DAY_START_HOUR && now.getMinutes()===0 && now.getSeconds()===0){
     const dk=stampNow;
-    if(lastMorning!==dk){ lastMorning=dk; fireMorning(); }
+    if(lastMorning!==dk){ lastMorning=dk; seedRecurring(stampNow); fireMorning(); }
   }
   if(!dayClosed && now.getMinutes()===TRIGGER_MINUTE && now.getSeconds()===0){
     const seq=seqForHour(now.getHours());
