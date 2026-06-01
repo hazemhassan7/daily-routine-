@@ -73,6 +73,9 @@ body{
 .cell.now .dots{color:rgba(255,255,255,.5);} .cell.now .count{color:rgba(255,255,255,.9);} .cell.now .tag{color:rgba(255,255,255,.85);}
 .cell.pass{background:var(--pass-bg);border-color:var(--pass-bd);}
 .cell.fail{background:var(--fail-bg);border-color:var(--accent);}
+.cell.emptyfail{background:#1a1714;border-color:#1a1714;}
+.cell.emptyfail .num{color:#fff;} .cell.emptyfail .hr{color:rgba(255,255,255,.5);}
+.failLabel{display:inline-block;margin-top:16px;background:#000;color:#fff;font-family:'DM Mono',monospace;font-size:11px;font-weight:500;letter-spacing:2px;padding:3px 8px;border-radius:3px;}
 .cell.morn{background:var(--morn-bg);border-color:var(--morn-bd);}
 .cell.morn .num{color:var(--morn-ink);} .cell.morn .tag{color:var(--morn-ink);}
 .cell.sleep{background:var(--sleep-bg);border-color:var(--sleep-bd);}
@@ -195,6 +198,16 @@ function dateStamp(d){ const c=new Date(d); if(c.getHours()<DAY_START_HOUR) c.se
   return c.getFullYear()+"-"+pad(c.getMonth()+1)+"-"+pad(c.getDate()); }
 const keyFor=(stamp,seq)=>stamp+"#"+seq;
 
+// Planning is only allowed in-window:
+//  - Morning (seq 1): 9:00–9:10
+//  - any other hour: only at :50 (the check-in window, :50–:59)
+function planWindowOpen(d){
+  const h=d.getHours(), min=d.getMinutes();
+  if(h===DAY_START_HOUR && min<=10) return true;        // Morning planning window
+  if(min>=TRIGGER_MINUTE && seqForHour(h)!==null) return true; // :50 check-in window of an active hour
+  return false;
+}
+
 // ───────────────────────── storage ─────────────────────────
 let log = {};
 try { log = JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch(e){ log = {}; }
@@ -215,8 +228,24 @@ function lockPast(now){
     const isPast = curSeq===null ? true : seq<curSeq;
     if(!isPast) continue;
     const k=keyFor(stamp,seq); const e=log[k];
-    if(!e) continue; if(e.locked) continue; if(!e.planned||e.planned.length===0) continue;
-    e.locked=true; e.passed=e.planned.every(t=>t.done); changed=true;
+    if(e && e.locked) continue;
+    const planned=(e&&e.planned)||[];
+    if(planned.length===0){
+      // never planned → empty fail (black label), counts as a real fail
+      log[k]={planned:[],locked:true,passed:false,emptyFail:true};
+    } else {
+      e.locked=true; e.passed=planned.every(t=>t.done);
+    }
+    changed=true;
+  }
+  // Morning special case: while it's still the current hour but past 9:10, an empty Morning fails
+  if(curSeq===1){
+    const past910 = now.getHours()===DAY_START_HOUR && now.getMinutes()>=11;
+    const k=keyFor(stamp,1); const e=log[k];
+    if(past910 && !(e&&e.locked) && !((e&&e.planned)||[]).length){
+      log[k]={planned:[],locked:true,passed:false,emptyFail:true};
+      changed=true;
+    }
   }
   if(changed) persist();
   // after locking, check for 3 failed-in-a-row → close the day
@@ -299,7 +328,8 @@ function dayStats(){
     const e=log[k];
     const hasTasks = e.planned && e.planned.length>0;
     const isClosedFail = e.closedFail===true;
-    if(!hasTasks && !isClosedFail) return;
+    const isEmptyFail = e.emptyFail===true;
+    if(!hasTasks && !isClosedFail && !isEmptyFail) return;
     const d=k.split("#")[0]; if(!byDay[d]) byDay[d]={pass:0,fail:0,planned:0};
     byDay[d].planned++;
     if(e.locked){ e.passed?byDay[d].pass++:byDay[d].fail++; }
@@ -365,144 +395,11 @@ function render(){
   for(let s=1;s<=TOTAL_SEQUENCES;s++){
     const e=log[keyFor(stamp,s)]; const st=statusOf(e);
     const isFirst=s===1,isLast=s===TOTAL_SEQUENCES,isBook=isFirst||isLast;
-    const unscored=st==="em let d=h-DAY_START_HOUR; if(d<0)d+=24; return d<TOTAL_SEQUENCES?d+1:null; };
-const hourForSeq = s => (DAY_START_HOUR+(s-1))%24;
-const seqName = s => s===1?"Morning Routine":(s===TOTAL_SEQUENCES?"Sleep Routine":"Sequence "+s);
-function dateStamp(d){ const c=new Date(d); if(c.getHours()<DAY_START_HOUR) c.setDate(c.getDate()-1);
-  return c.getFullYear()+"-"+pad(c.getMonth()+1)+"-"+pad(c.getDate()); }
-const keyFor=(stamp,seq)=>stamp+"#"+seq;
-
-// ───────────────────────── storage ─────────────────────────
-let log = {};
-try { log = JSON.parse(localStorage.getItem(STORE_KEY) || "{}"); } catch(e){ log = {}; }
-function persist(){ try{ localStorage.setItem(STORE_KEY, JSON.stringify(log)); }catch(e){} }
-
-function statusOf(e){
-  if(!e) return "empty";
-  if(e.locked) return e.passed?"locked-pass":"locked-fail";
-  if(!e.planned || e.planned.length===0) return "empty";
-  return "open";
-}
-function lockPast(now){
-  const stamp=dateStamp(now); const curSeq=seqForHour(now.getHours()); let changed=false;
-  for(let seq=1;seq<=TOTAL_SEQUENCES;seq++){
-    const isPast = curSeq===null ? true : seq<curSeq;
-    if(!isPast) continue;
-    const k=keyFor(stamp,seq); const e=log[k];
-    if(!e) continue; if(e.locked) continue; if(!e.planned||e.planned.length===0) continue;
-    e.locked=true; e.passed=e.planned.every(t=>t.done); changed=true;
-  }
-  if(changed) persist();
-  return changed;
-}
-
-// ───────────────────────── state ─────────────────────────
-let now=new Date();
-let checkinOpen=false, histOpen=false, step=1, lastTriggered=null;
-let planOnly=false; // when true, the check-in modal shows ONLY the plan step (used for the 9:00 Morning plan)
-let lastMorning=null; // tracks the day we've already fired the 9:00 morning popup for
-let notifyOk = ("Notification" in window) && Notification.permission==="granted";
-
-// ───────────────────────── notifications + sound ─────────────────────────
-function beep(){
-  try{
-    const Ctx=window.AudioContext||window.webkitAudioContext; const ctx=new Ctx();
-    [0,.18,.36].forEach(t=>{ const o=ctx.createOscillator(),g=ctx.createGain();
-      o.connect(g);g.connect(ctx.destination);o.frequency.value=880;o.type="sine";
-      g.gain.setValueAtTime(.0001,ctx.currentTime+t);
-      g.gain.exponentialRampToValueAtTime(.3,ctx.currentTime+t+.02);
-      g.gain.exponentialRampToValueAtTime(.0001,ctx.currentTime+t+.15);
-      o.start(ctx.currentTime+t);o.stop(ctx.currentTime+t+.16); });
-  }catch(e){}
-}
-function fireCheckin(seq){
-  step=1; planOnly=false; checkinOpen=true; beep(); render();
-  if(notifyOk){ try{ new Notification(":50 — "+seqName(seq),
-    {body:"10 minutes to check off your tasks, or the hour fails."}); }catch(e){} }
-}
-function fireMorning(){
-  // 9:00 — plan Morning's tasks only (no review). Reuses the modal in plan-only mode.
-  step=2; planOnly=true; checkinOpen=true; beep(); render();
-  if(notifyOk){ try{ new Notification("9:00 — Plan your Morning",
-    {body:"Type your Morning Routine tasks to start the day."}); }catch(e){} }
-}
-document.getElementById("notifyBtn").onclick=async()=>{
-  if(!("Notification" in window)) return;
-  const p=await Notification.requestPermission(); notifyOk=(p==="granted"); render();
-};
-
-// ───────────────────────── history rollup ─────────────────────────
-function dayStats(){
-  const byDay={};
-  Object.keys(log).forEach(k=>{ const e=log[k]; if(!e.planned||e.planned.length===0) return;
-    const d=k.split("#")[0]; if(!byDay[d]) byDay[d]={pass:0,fail:0,planned:0};
-    byDay[d].planned++; if(e.locked){ e.passed?byDay[d].pass++:byDay[d].fail++; } });
-  return Object.keys(byDay).sort().map(d=>{ const s=byDay[d]; const scored=s.pass+s.fail;
-    return {date:d,...s,scored,rate:scored?s.pass/scored:0}; });
-}
-function computeStreak(){ const today=dateStamp(new Date());
-  const past=dayStats().filter(d=>d.date!==today&&d.scored>0); let n=0;
-  for(let i=past.length-1;i>=0;i--){ if(past[i].rate===1)n++; else break; } return n; }
-function dotColor(d){ if(d.scored===0)return "var(--hair)"; if(d.rate===1)return "var(--pass-bd)";
-  if(d.rate>=.5)return "var(--partial)"; return "var(--accent)"; }
-function fmtDayLabel(s){ const[y,m,dd]=s.split("-").map(Number);
-  return new Date(y,m-1,dd).toLocaleDateString(undefined,{month:"short",day:"numeric"}); }
-
-// ───────────────────────── render ─────────────────────────
-function render(){
-  const curHour=now.getHours(), curSeq=seqForHour(curHour);
-  const nextHour=(curHour+1)%24, nextSeq=seqForHour(nextHour);
-  const stamp=dateStamp(now);
-
-  // clock
-  document.getElementById("ch").textContent = curSeq?pad(curHour):"00";
-  document.getElementById("cm").textContent = curSeq?pad(now.getMinutes()):"00";
-  document.getElementById("sub").textContent = curSeq?(seqName(curSeq)+" · "+fmtHour(curHour)):"Day's done — showing today's board";
-
-  // score
-  let passed=0,failed=0;
-  for(let s=1;s<=TOTAL_SEQUENCES;s++){ const st=statusOf(log[keyFor(stamp,s)]);
-    if(st==="locked-pass")passed++; else if(st==="locked-fail")failed++; }
-  document.getElementById("passed").textContent="✓ "+passed+" passed";
-  document.getElementById("failed").textContent="✕ "+failed+" failed";
-
-  // next box
-  const nb=document.getElementById("nextBox");
-  let secs=(()=>{ const t=new Date(now); t.setMinutes(TRIGGER_MINUTE,0,0);
-    if(now.getMinutes()>=TRIGGER_MINUTE) t.setHours(t.getHours()+1);
-    return Math.max(0,Math.round((t-now)/1000)); })();
-  if(nextSeq&&curSeq){
-    nb.innerHTML='<div class="nextLabel">NEXT CHECK-IN</div><div class="nextTime">'+pad(Math.floor(secs/60))+":"+pad(secs%60)+'</div>';
-  } else if(curSeq){
-    nb.innerHTML='<div class="nextLabel">FINAL SEQUENCE</div><div class="nextTime" style="font-size:18px;color:var(--accent)">ends 1 AM</div>';
-  } else {
-    const t=new Date(now); t.setHours(DAY_START_HOUR,0,0,0); if(now.getHours()>=DAY_START_HOUR) t.setDate(t.getDate()+1);
-    const tot=Math.max(0,Math.round((t-now)/1000)); const h=Math.floor(tot/3600),m=Math.floor((tot%3600)/60);
-    nb.innerHTML='<div class="nextLabel">NEW DAY IN</div><div class="nextTime" style="font-size:20px">'+h+"h "+pad(m)+'m</div><div class="restNote">resets at 9 AM 🌙</div>';
-  }
-
-  // notify banner
-  document.getElementById("notifyBtn").classList.toggle("hidden", notifyOk);
-
-  // spine
-  const spine=document.getElementById("spine"); spine.innerHTML="";
-  for(let s=1;s<=TOTAL_SEQUENCES;s++){ const st=statusOf(log[keyFor(stamp,s)]);
-    const seg=document.createElement("span"); seg.className="spineSeg";
-    if(st==="locked-pass")seg.classList.add("pass");
-    else if(st==="locked-fail")seg.classList.add("fail");
-    else if(s===curSeq)seg.classList.add("now");
-    spine.appendChild(seg); }
-
-  // grid
-  const grid=document.getElementById("grid"); grid.innerHTML="";
-  for(let s=1;s<=TOTAL_SEQUENCES;s++){
-    const e=log[keyFor(stamp,s)]; const st=statusOf(e);
-    const isFirst=s===1,isLast=s===TOTAL_SEQUENCES,isBook=isFirst||isLast;
     const unscored=st==="empty"||st==="open";
     const isCur=s===curSeq, isFut=curSeq&&s>curSeq;
     const cell=document.createElement("div"); cell.className="cell";
     if(st==="locked-pass")cell.classList.add("pass");
-    else if(st==="locked-fail")cell.classList.add("fail");
+    else if(st==="locked-fail"){ cell.classList.add(e&&e.emptyFail?"emptyfail":"fail"); }
     else if(isBook&&unscored)cell.classList.add(isFirst?"morn":"sleep");
     if(isFut)cell.classList.add("future");
     if(isCur)cell.classList.add("now");
@@ -510,7 +407,10 @@ function render(){
     let inner='<div class="top"><span class="num">'+s+'</span><span class="hr">'+fmtHour(hourForSeq(s))+'</span></div>';
     if(isBook&&unscored) inner+='<div class="tag">'+(isFirst?"MORNING":"SLEEP")+'</div>';
     if(st==="locked-pass") inner+='<div class="glyph" style="color:var(--pass-ink)">✓</div>';
-    else if(st==="locked-fail") inner+='<div class="glyph" style="color:var(--accent)">✕</div>';
+    else if(st==="locked-fail"){
+      if(e&&e.emptyFail) inner+='<div class="failLabel">FAILED</div>';
+      else inner+='<div class="glyph" style="color:var(--accent)">✕</div>';
+    }
     else { const items=(e&&e.planned)||[];
       if(items.length===0) inner+='<div class="dots">·&nbsp;&nbsp;·&nbsp;&nbsp;·</div>';
       else { const dn=items.filter(t=>t.done).length; inner+='<div class="count">'+dn+"/"+items.length+' done</div>'; } }
@@ -522,11 +422,25 @@ function render(){
   const streak=computeStreak();
   document.getElementById("histStreakInline").textContent = streak>0?("🔥 "+streak+"-day streak"):"";
 
-  if(checkinOpen) renderCheckin(curSeq,nextSeq,curHour,nextHour,stamp);
+  // if the Morning planning popup is open but Morning has locked (e.g. 9:11 empty-fail), close it
+  if(planOnly){ const me=log[keyFor(stamp,1)]; if(me&&me.locked){ checkinOpen=false; planOnly=false; modalDirty=true; } }
+
+  // day-closed reckoning takes over everything
+  const closed = isDayClosed(stamp);
+  if(closed) checkinOpen=false;
+  const reckEl=document.getElementById("reckoning");
+  const showReck = reckoningOpen && closed;
+  const wasHidden = reckEl.classList.contains("hidden");
+  reckEl.classList.toggle("hidden", !showReck);
+  if(showReck && wasHidden) armReckButton(); // arm only on first appearance
+
+  if(checkinOpen){ if(modalDirty) renderCheckin(curSeq,nextSeq,curHour,nextHour,stamp); }
   document.getElementById("checkinOverlay").classList.toggle("hidden",!checkinOpen);
 
-  if(histOpen) renderHistory(stamp);
+  if(histOpen){ if(modalDirty) renderHistory(stamp); }
   document.getElementById("histOverlay").classList.toggle("hidden",!histOpen);
+
+  modalDirty=false;
 }
 
 // ───────────────────────── check-in modal ─────────────────────────
@@ -537,22 +451,23 @@ function renderCheckin(curSeq,nextSeq,curHour,nextHour,stamp){
   if(planOnly){
     const mornK=keyFor(stamp,1);
     const mornTasks=(log[mornK]&&log[mornK].planned)||[];
+    const winOpen = now.getHours()===DAY_START_HOUR && now.getMinutes()<=10;
     let ph='<div class="histHead"><span class="histTitle">9:00 · PLAN YOUR MORNING</span></div>';
     ph+='<div class="mTitle">Plan Morning Routine</div>';
-    ph+='<div class="mSub">'+fmtHour(hourForSeq(1))+' · type your tasks for the day\'s start</div>';
-    mornTasks.forEach((t,i)=>{ ph+='<div class="planRow"><span class="dot"></span><span class="rowText">'+escapeHtml(t.text)+'</span><button class="del" data-mremove="'+i+'">×</button></div>'; });
-    ph+='<div class="inputRow"><input class="input" id="mdraft" placeholder="Add a Morning task…" /><button class="add" id="maddBtn">Add</button></div>';
+    ph+='<div class="mSub">'+fmtHour(hourForSeq(1))+' · '+(winOpen?"type your tasks for the day\'s start":"<span class=\"warn\">planning window closed (9:00–9:10)</span>")+'</div>';
+    mornTasks.forEach((t,i)=>{ ph+='<div class="planRow"><span class="dot"></span><span class="rowText">'+escapeHtml(t.text)+'</span>'+(winOpen?'<button class="del" data-mremove="'+i+'">×</button>':'')+'</div>'; });
+    if(winOpen) ph+='<div class="inputRow"><input class="input" id="mdraft" placeholder="Add a Morning task…" /><button class="add" id="maddBtn">Add</button></div>';
     ph+='<button class="primary" id="mDone">Done</button>';
     m.innerHTML=ph;
     const md=m.querySelector("#mdraft"), mb=m.querySelector("#maddBtn");
     function addM(){ const v=(md.value||"").trim(); if(!v)return;
       if(!log[mornK])log[mornK]={planned:[],locked:false,passed:false};
-      log[mornK].planned.push({text:v,done:false}); persist(); render();
+      log[mornK].planned.push({text:v,done:false}); persist(); modalDirty=true; render();
       setTimeout(()=>{ const a=document.getElementById("mdraft"); if(a)a.focus(); },0); }
     if(mb) mb.onclick=addM;
     if(md) md.onkeydown=e=>{ if(e.key==="Enter") addM(); };
     m.querySelectorAll("[data-mremove]").forEach(el=>el.onclick=()=>{
-      const i=+el.dataset.mremove; if(log[mornK]) log[mornK].planned.splice(i,1); persist(); render();
+      const i=+el.dataset.mremove; if(log[mornK]) log[mornK].planned.splice(i,1); persist(); modalDirty=true; render();
     });
     m.querySelector("#mDone").onclick=()=>{ checkinOpen=false; planOnly=false; render(); };
     return;
@@ -579,11 +494,13 @@ function renderCheckin(curSeq,nextSeq,curHour,nextHour,stamp){
     if(curTasks.length>0){ const dn=curTasks.filter(t=>t.done).length; h+='<div class="prog">'+dn+" / "+curTasks.length+' checked</div>'; }
     h+='<button class="primary" id="toStep2">'+(nextSeq?"Next: plan "+seqName(nextSeq):"Done")+'</button>';
   } else {
+    const winOpen = now.getMinutes()>=TRIGGER_MINUTE; // :50 planning window
     h+='<div class="mTitle">'+(nextSeq?"Plan "+seqName(nextSeq):"Day complete")+'</div>';
-    h+='<div class="mSub">'+(nextSeq?fmtHour(nextHour):"Rest up 🌙")+'</div>';
+    h+='<div class="mSub">'+(nextSeq?(fmtHour(nextHour)+(winOpen?"":" · <span class=\"warn\">opens at :50</span>")):"Rest up 🌙")+'</div>';
     if(nextSeq){
-      nextTasks.forEach((t,i)=>{ h+='<div class="planRow"><span class="dot"></span><span class="rowText">'+escapeHtml(t.text)+'</span><button class="del" data-remove="'+i+'">×</button></div>'; });
-      h+='<div class="inputRow"><input class="input" id="draft" placeholder="Add a task for next hour…" /><button class="add" id="addBtn">Add</button></div>';
+      nextTasks.forEach((t,i)=>{ h+='<div class="planRow"><span class="dot"></span><span class="rowText">'+escapeHtml(t.text)+'</span>'+(winOpen?'<button class="del" data-remove="'+i+'">×</button>':'')+'</div>'; });
+      if(winOpen) h+='<div class="inputRow"><input class="input" id="draft" placeholder="Add a task for next hour…" /><button class="add" id="addBtn">Add</button></div>';
+      else h+='<div class="empty">You can only plan the next hour during the :50 check-in.</div>';
     } else h+='<div class="empty">End of your 16 sequences.</div>';
     h+='<div class="btnRow"><button class="back" id="toStep1">← Back</button><button class="primary" style="margin-top:0" id="lockIn">Lock it in</button></div>';
   }
@@ -592,21 +509,21 @@ function renderCheckin(curSeq,nextSeq,curHour,nextHour,stamp){
   // wire events
   m.querySelectorAll("[data-toggle]").forEach(el=>el.onclick=()=>{
     if(!curSeq||curLocked) return; const i=+el.dataset.toggle;
-    const e=log[keyFor(stamp,curSeq)]; if(e&&!e.locked){ e.planned[i].done=!e.planned[i].done; persist(); render(); }
+    const e=log[keyFor(stamp,curSeq)]; if(e&&!e.locked){ e.planned[i].done=!e.planned[i].done; persist(); modalDirty=true; render(); }
   });
-  const s2=m.querySelector("#toStep2"); if(s2) s2.onclick=()=>{ step=2; render(); };
-  const s1=m.querySelector("#toStep1"); if(s1) s1.onclick=()=>{ step=1; render(); };
+  const s2=m.querySelector("#toStep2"); if(s2) s2.onclick=()=>{ step=2; modalDirty=true; render(); };
+  const s1=m.querySelector("#toStep1"); if(s1) s1.onclick=()=>{ step=1; modalDirty=true; render(); };
   const lock=m.querySelector("#lockIn"); if(lock) lock.onclick=()=>{ checkinOpen=false; render(); };
   const addBtn=m.querySelector("#addBtn"), draft=m.querySelector("#draft");
   function addTask(){ const v=(draft.value||"").trim(); if(!v||!nextSeq) return;
     const k=keyFor(stamp,nextSeq); if(!log[k])log[k]={planned:[],locked:false,passed:false};
-    log[k].planned.push({text:v,done:false}); persist(); render();
+    log[k].planned.push({text:v,done:false}); persist(); modalDirty=true; render();
     setTimeout(()=>{ const d=document.getElementById("draft"); if(d)d.focus(); },0); }
   if(addBtn) addBtn.onclick=addTask;
   if(draft) draft.onkeydown=e=>{ if(e.key==="Enter") addTask(); };
   m.querySelectorAll("[data-remove]").forEach(el=>el.onclick=()=>{
     if(!nextSeq) return; const i=+el.dataset.remove; const k=keyFor(stamp,nextSeq);
-    if(log[k]) log[k].planned.splice(i,1); persist(); render();
+    if(log[k]) log[k].planned.splice(i,1); persist(); modalDirty=true; render();
   });
 }
 
@@ -634,26 +551,46 @@ document.getElementById("checkinBtn").onclick=()=>{
   // If we're in Morning and it isn't locked yet, open Morning planning instead of review
   if(cs===1 && !(mornE&&mornE.locked)){ planOnly=true; }
   else { step=1; planOnly=false; }
-  checkinOpen=true; render();
+  checkinOpen=true; modalDirty=true; render();
 };
-document.getElementById("histBtn").onclick=()=>{ histOpen=true; render(); };
+document.getElementById("histBtn").onclick=()=>{ histOpen=true; modalDirty=true; render(); };
 document.getElementById("checkinOverlay").onclick=e=>{ if(e.target.id==="checkinOverlay"){ checkinOpen=false; render(); } };
 document.getElementById("histOverlay").onclick=e=>{ if(e.target.id==="histOverlay"){ histOpen=false; render(); } };
 
+// reckoning button: locked for 5s so you have to sit with it, then dismisses
+let reckTimer=null;
+function armReckButton(){
+  const btn=document.getElementById("reckBtn");
+  btn.disabled=true; btn.classList.remove("ready");
+  let s=5; btn.textContent="Sit with it… "+s;
+  clearInterval(reckTimer);
+  reckTimer=setInterval(()=>{ s--; if(s<=0){ clearInterval(reckTimer);
+      btn.disabled=false; btn.classList.add("ready"); btn.textContent="I accept the day is lost"; }
+    else btn.textContent="Sit with it… "+s; },1000);
+}
+document.getElementById("reckBtn").onclick=()=>{ if(document.getElementById("reckBtn").disabled) return;
+  reckoningOpen=false; render(); };
+
 // ───────────────────────── tick loop ─────────────────────────
 lockPast(new Date());
+// if today is already closed (e.g. reopening the app), confront the reckoning on load
+if(isDayClosed(dateStamp(new Date()))) reckoningOpen=true;
 setInterval(()=>{
   now=new Date();
-  // 9:00 sharp — open Morning planning (once per day)
-  if(now.getHours()===DAY_START_HOUR && now.getMinutes()===0 && now.getSeconds()===0){
-    const dk=dateStamp(now);
+  const stampNow=dateStamp(now);
+  const dayClosed=isDayClosed(stampNow);
+  // 9:00 sharp — open Morning planning (once per day), unless day already closed
+  if(!dayClosed && now.getHours()===DAY_START_HOUR && now.getMinutes()===0 && now.getSeconds()===0){
+    const dk=stampNow;
     if(lastMorning!==dk){ lastMorning=dk; fireMorning(); }
   }
-  if(now.getMinutes()===TRIGGER_MINUTE && now.getSeconds()===0){
+  if(!dayClosed && now.getMinutes()===TRIGGER_MINUTE && now.getSeconds()===0){
     const seq=seqForHour(now.getHours());
-    if(seq){ const k=keyFor(dateStamp(now),seq); if(lastTriggered!==k){ lastTriggered=k; fireCheckin(seq); } }
+    if(seq){ const k=keyFor(stampNow,seq); if(lastTriggered!==k){ lastTriggered=k; fireCheckin(seq); } }
   }
   if(now.getMinutes()===0 && now.getSeconds()===0) lockPast(now);
+  // Morning empty-fail deadline at 9:11:00
+  if(now.getHours()===DAY_START_HOUR && now.getMinutes()===11 && now.getSeconds()===0) lockPast(now);
   render();
 },1000);
 
