@@ -340,6 +340,8 @@ let checkinOpen=false, histOpen=false, step=1, lastTriggered=null;
 let planOnly=false; // when true, the check-in modal shows ONLY the plan step (used for the 9:00 Morning plan)
 let reckoningOpen=false; // the 3-strike day-closed screen
 let dailyOpen=false; // recurring daily-tasks template editor
+// ── TEMPORARY override tool: tap any locked cell to flip pass/fail. REMOVE LATER. ──
+const OVERRIDE_ENABLED=true;
 let lastMorning=null; // tracks the day we've already fired the 9:00 morning popup for
 let modalDirty=true; // when true, the open modal needs a full rebuild; ticks alone won't rebuild it
 let notifyOk = ("Notification" in window) && Notification.permission==="granted";
@@ -467,12 +469,38 @@ function render(){
       if(items.length===0) inner+='<div class="dots">·&nbsp;&nbsp;·&nbsp;&nbsp;·</div>';
       else { const dn=items.filter(t=>t.done).length; inner+='<div class="count">'+dn+"/"+items.length+' done</div>'; } }
     cell.innerHTML=inner;
+    // TEMPORARY: allow tapping a locked cell to flip its pass/fail state
+    if(OVERRIDE_ENABLED && (st==="locked-pass"||st==="locked-fail")){
+      cell.style.cursor="pointer";
+      cell.dataset.override=s;
+    }
     grid.appendChild(cell);
   }
 
   // history inline streak
-  const streak=computeStreak();
-  document.getElementById("histStreakInline").textContent = streak>0?("🔥 "+streak+"-day streak"):"";
+  const streak=computeStreak();  document.getElementById("histStreakInline").textContent = streak>0?("🔥 "+streak+"-day streak"):"";
+
+  // TEMPORARY override: tap a locked cell to flip pass/fail
+  if(OVERRIDE_ENABLED){
+    document.getElementById("grid").querySelectorAll("[data-override]").forEach(el=>el.onclick=()=>{
+      const s=+el.dataset.override; const k=keyFor(stamp,s); const e=log[k]; if(!e) return;
+      const nowPass=!e.passed;
+      if(confirm("Override "+seqName(s)+" → "+(nowPass?"PASS":"FAIL")+"?")){
+        e.passed=nowPass; e.locked=true; delete e.emptyFail;
+        if(nowPass){
+          e.planned.forEach(t=>t.done=true);
+          // lift a day-closure if one was set, and un-fail the auto-closed (closedFail) hours
+          const dk=dayClosedKey(stamp);
+          if(log[dk]){
+            delete log[dk]; reckoningOpen=false;
+            for(let q=1;q<=TOTAL_SEQUENCES;q++){ const ek=keyFor(stamp,q); const en=log[ek];
+              if(en && en.closedFail){ delete log[ek]; } } // remove the auto-fail stamps
+          }
+        }
+        persist(); modalDirty=true; render();
+      }
+    });
+  }
 
   // planOnly is ONLY for the 9:00–9:10 Morning planning window.
   // Once that window passes (or Morning locks), drop out of plan mode so the
