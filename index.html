@@ -186,9 +186,9 @@ body{
   <div class="reckInner">
     <div class="reckHead">DAY CLOSED.</div>
     <div class="reckBody">
-      Two in a row, or three across the day — either way, it's done. Every hour left is a loss now.<br/><br/>
-      This is the exact pattern that keeps people stuck: not the failing, the <em>quitting after failing</em>.<br/><br/>
-      You don't get this day back. Tomorrow at 9:00, prove this was the floor, not the trend.
+      You failed. Not bad luck — you. You made the same mistake you keep making, and you let it happen again.<br/><br/>
+      This is the pattern. Most people never break it — they tell themselves tomorrow's different, and it never is.<br/><br/>
+      So prove you're not most people. The day is gone. <em>9:00 tomorrow is the only thing that answers this</em> — not words, not regret. Show up and do what you said you would.
     </div>
     <button class="reckBtn" id="reckBtn">I accept the day is lost</button>
   </div>
@@ -474,8 +474,19 @@ function render(){
   const streak=computeStreak();
   document.getElementById("histStreakInline").textContent = streak>0?("🔥 "+streak+"-day streak"):"";
 
-  // if the Morning planning popup is open but Morning has locked (e.g. 9:11 empty-fail), close it
-  if(planOnly){ const me=log[keyFor(stamp,1)]; if(me&&me.locked){ checkinOpen=false; planOnly=false; modalDirty=true; } }
+  // planOnly is ONLY for the 9:00–9:10 Morning planning window.
+  // Once that window passes (or Morning locks), drop out of plan mode so the
+  // normal check-in (with checkboxes) shows.
+  if(planOnly){
+    const me=log[keyFor(stamp,1)];
+    const inMorningWindow = now.getHours()===DAY_START_HOUR && now.getMinutes()<=10;
+    if((me&&me.locked) || !inMorningWindow){
+      planOnly=false; step=1; modalDirty=true;
+      // if the popup was open purely for Morning planning and we've left the window,
+      // close it unless we're now in a check-in window
+      if(!(me&&me.locked) && now.getMinutes()<TRIGGER_MINUTE){ /* keep open as review */ }
+    }
+  }
 
   // day-closed reckoning takes over everything
   const closed = isDayClosed(stamp);
@@ -644,10 +655,10 @@ function renderDaily(){
 
 // ───────────────────────── wire static buttons ─────────────────────────
 document.getElementById("checkinBtn").onclick=()=>{
-  const stampNow=dateStamp(now); const cs=seqForHour(now.getHours());
-  const mornE=log[keyFor(stampNow,1)];
-  // If we're in Morning and it isn't locked yet, open Morning planning instead of review
-  if(cs===1 && !(mornE&&mornE.locked)){ planOnly=true; }
+  const cs=seqForHour(now.getHours());
+  const inMorningWindow = now.getHours()===DAY_START_HOUR && now.getMinutes()<=10;
+  // Morning planning ONLY during 9:00–9:10; otherwise the normal review/check-in
+  if(cs===1 && inMorningWindow){ planOnly=true; }
   else { step=1; planOnly=false; }
   checkinOpen=true; modalDirty=true; render();
 };
