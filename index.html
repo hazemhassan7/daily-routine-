@@ -340,8 +340,7 @@ let checkinOpen=false, histOpen=false, step=1, lastTriggered=null;
 let planOnly=false; // when true, the check-in modal shows ONLY the plan step (used for the 9:00 Morning plan)
 let reckoningOpen=false; // the 3-strike day-closed screen
 let dailyOpen=false; // recurring daily-tasks template editor
-// ── TEMPORARY override tool: tap any locked cell to flip pass/fail. REMOVE LATER. ──
-const OVERRIDE_ENABLED=true;
+const OVERRIDE_ENABLED=false;
 let lastMorning=null; // tracks the day we've already fired the 9:00 morning popup for
 let modalDirty=true; // when true, the open modal needs a full rebuild; ticks alone won't rebuild it
 let notifyOk = ("Notification" in window) && Notification.permission==="granted";
