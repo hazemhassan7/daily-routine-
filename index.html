@@ -84,6 +84,9 @@ body{
 .cell.emptyfail{background:#1a1714;border-color:#1a1714;}
 .cell.emptyfail .num{color:#fff;} .cell.emptyfail .hr{color:rgba(255,255,255,.5);}
 .failLabel{display:inline-block;margin-top:16px;background:#000;color:#fff;font-family:'DM Mono',monospace;font-size:11px;font-weight:500;letter-spacing:2px;padding:3px 8px;border-radius:3px;}
+.cell.overridden{background:#eee7d6;border-color:#b9a98c;border-style:dashed;}
+.cell.overridden .num{color:#8a7a5e;}
+.ovLabel{display:inline-block;margin-top:16px;color:#8a7a5e;font-family:'DM Mono',monospace;font-size:9px;font-weight:500;letter-spacing:1.5px;border:1px dashed #b9a98c;padding:3px 6px;border-radius:3px;}
 .cell.morn{background:var(--morn-bg);border-color:var(--morn-bd);}
 .cell.morn .num{color:var(--morn-ink);} .cell.morn .tag{color:var(--morn-ink);}
 .cell.sleep{background:var(--sleep-bg);border-color:var(--sleep-bd);}
@@ -279,7 +282,10 @@ function seedRecurring(stamp){
 
 function statusOf(e){
   if(!e) return "empty";
-  if(e.locked) return e.passed?"locked-pass":"locked-fail";
+  if(e.locked){
+    if(e.overridden) return "overridden";
+    return e.passed?"locked-pass":"locked-fail";
+  }
   if(!e.planned || e.planned.length===0) return "empty";
   return "open";
 }
@@ -409,7 +415,7 @@ let planOnly=false; // when true, the check-in modal shows ONLY the plan step (u
 let reckoningOpen=false; // the day-closed screen
 let lastChanceOpen=false; // the one-time Last Chance offer screen
 let dailyOpen=false; // recurring daily-tasks template editor
-const OVERRIDE_ENABLED=false;
+const OVERRIDE_ENABLED=true; // permanent: tap a locked cell to override → marked, no XP
 let lastMorning=null; // tracks the day we've already fired the 9:00 morning popup for
 let modalDirty=true; // when true, the open modal needs a full rebuild; ticks alone won't rebuild it
 let lastLevel=null, lvlFlashTimer=null; // level-up flash tracking
@@ -492,7 +498,7 @@ function dayStats(){  const byDay={};
     if(!hasTasks && !isClosedFail && !isEmptyFail) return;
     const d=k.split("#")[0]; if(!byDay[d]) byDay[d]={pass:0,fail:0,planned:0};
     byDay[d].planned++;
-    if(e.locked){ e.passed?byDay[d].pass++:byDay[d].fail++; }
+    if(e.locked && !e.overridden){ e.passed?byDay[d].pass++:byDay[d].fail++; }
   });
   return Object.keys(byDay).sort().map(d=>{ const s=byDay[d]; const scored=s.pass+s.fail;
     return {date:d,...s,scored,rate:scored?s.pass/scored:0}; });
@@ -569,6 +575,7 @@ function render(){
   for(let s=1;s<=TOTAL_SEQUENCES;s++){ const se=log[keyFor(stamp,s)]; const st=statusOf(se);
     const seg=document.createElement("span"); seg.className="spineSeg";
     if(st==="locked-pass")seg.classList.add("pass");
+    else if(st==="overridden")seg.style.background="#b9a98c";
     else if(st==="locked-fail"){ if(se&&se.emptyFail) seg.style.background="#000"; else seg.classList.add("fail"); }
     else if(s===curSeq)seg.classList.add("now");
     spine.appendChild(seg); }
@@ -583,6 +590,7 @@ function render(){
     const cell=document.createElement("div"); cell.className="cell";
     if(st==="locked-pass")cell.classList.add("pass");
     else if(st==="locked-fail"){ cell.classList.add(e&&e.emptyFail?"emptyfail":"fail"); }
+    else if(st==="overridden")cell.classList.add("overridden");
     else if(isBook&&unscored)cell.classList.add(isFirst?"morn":"sleep");
     if(isFut)cell.classList.add("future");
     if(isCur)cell.classList.add("now");
@@ -590,6 +598,7 @@ function render(){
     let inner='<div class="top"><span class="num">'+s+'</span><span class="hr">'+fmtHour(hourForSeq(s))+'</span></div>';
     if(isBook&&unscored) inner+='<div class="tag">'+(isFirst?"MORNING":"SLEEP")+'</div>';
     if(st==="locked-pass") inner+='<div class="glyph" style="color:var(--pass-ink)">✓</div>';
+    else if(st==="overridden") inner+='<div class="ovLabel">OVERRIDDEN</div>';
     else if(st==="locked-fail"){
       if(e&&e.emptyFail) inner+='<div class="failLabel">FAILED</div>';
       else inner+='<div class="glyph" style="color:var(--accent)">✕</div>';
@@ -598,8 +607,8 @@ function render(){
       if(items.length===0) inner+='<div class="dots">·&nbsp;&nbsp;·&nbsp;&nbsp;·</div>';
       else { const dn=items.filter(t=>t.done).length; inner+='<div class="count">'+dn+"/"+items.length+' done</div>'; } }
     cell.innerHTML=inner;
-    // TEMPORARY: allow tapping a locked cell to flip its pass/fail state
-    if(OVERRIDE_ENABLED && (st==="locked-pass"||st==="locked-fail")){
+    // override: tap a failed cell to mark done (marked, no XP), or tap an overridden cell to revert
+    if(OVERRIDE_ENABLED && (st==="locked-fail"||st==="overridden")){
       cell.style.cursor="pointer";
       cell.dataset.override=s;
     }
@@ -613,18 +622,24 @@ function render(){
   if(OVERRIDE_ENABLED){
     document.getElementById("grid").querySelectorAll("[data-override]").forEach(el=>el.onclick=()=>{
       const s=+el.dataset.override; const k=keyFor(stamp,s); const e=log[k]; if(!e) return;
-      const nowPass=!e.passed;
-      if(confirm("Override "+seqName(s)+" → "+(nowPass?"PASS":"FAIL")+"?")){
-        e.passed=nowPass; e.locked=true; delete e.emptyFail;
-        if(nowPass){
-          e.planned.forEach(t=>t.done=true);
-          // lift a day-closure if one was set, and un-fail the auto-closed (closedFail) hours
-          const dk=dayClosedKey(stamp);
-          if(log[dk]){
-            delete log[dk]; reckoningOpen=false;
-            for(let q=1;q<=TOTAL_SEQUENCES;q++){ const ek=keyFor(stamp,q); const en=log[ek];
-              if(en && en.closedFail){ delete log[ek]; } } // remove the auto-fail stamps
-          }
+      if(e.overridden){
+        // tapping an already-overridden cell lets you revert it back to fail
+        if(confirm("Remove override on "+seqName(s)+" (back to FAIL)?")){
+          e.overridden=false; e.passed=false; e.locked=true;
+          persist(); modalDirty=true; render();
+        }
+        return;
+      }
+      if(e.passed){ return; } // genuine passes aren't overridable
+      if(confirm("Override "+seqName(s)+" to DONE?\n\nIt will be marked as overridden and earns no XP. This is a correction, not a win.")){
+        e.passed=true; e.locked=true; e.overridden=true; delete e.emptyFail;
+        e.planned.forEach(t=>t.done=true);
+        // lift a day-closure if one was set, and un-fail the auto-closed hours
+        const dk=dayClosedKey(stamp);
+        if(log[dk]){
+          delete log[dk]; reckoningOpen=false;
+          for(let q=1;q<=TOTAL_SEQUENCES;q++){ const ek=keyFor(stamp,q); const en=log[ek];
+            if(en && en.closedFail){ delete log[ek]; } }
         }
         persist(); modalDirty=true; render();
       }
