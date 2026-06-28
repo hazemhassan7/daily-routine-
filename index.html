@@ -144,6 +144,7 @@ body{
 .reckBtn{margin-top:32px;width:100%;font-family:'DM Mono',monospace;font-size:14px;padding:15px;background:transparent;color:#9a8c7e;border:1px solid #3a342e;border-radius:6px;cursor:pointer;letter-spacing:1px;transition:opacity .3s;}
 .reckBtn.ready{color:#fff;border-color:var(--accent);}
 .reckBtn:disabled{opacity:.4;}
+.hourSel{width:100%;font-family:'DM Mono',monospace;font-size:14px;padding:10px 12px;border:1px solid #ccc0ad;border-radius:6px;background:#fff;color:var(--ink);}
 </style>
 </head>
 <body>
@@ -169,6 +170,11 @@ body{
   <div class="spine" id="spine"></div>
   <div class="grid" id="grid"></div>
 
+  <button class="histBtn" id="anytimeBtn" style="margin-top:18px;">
+    <span>＋&nbsp;&nbsp;Add a task</span>
+    <span class="streak" style="color:var(--muted);">any hour</span>
+  </button>
+
   <button class="histBtn" id="dailyBtn" style="margin-top:18px;">
     <span>🔁&nbsp;&nbsp;Daily Tasks</span>
     <span class="streak" style="color:var(--muted);">recurring</span>
@@ -178,6 +184,11 @@ body{
     <span>📅&nbsp;&nbsp;History</span>
     <span class="streak" id="histStreakInline"></span>
   </button>
+</div>
+
+<!-- add-a-task-anytime modal -->
+<div class="overlay hidden" id="anytimeOverlay">
+  <div class="modal" id="anytimeModal"></div>
 </div>
 
 <!-- daily-tasks (recurring template) modal -->
@@ -415,6 +426,7 @@ let planOnly=false; // when true, the check-in modal shows ONLY the plan step (u
 let reckoningOpen=false; // the day-closed screen
 let lastChanceOpen=false; // the one-time Last Chance offer screen
 let dailyOpen=false; // recurring daily-tasks template editor
+let anytimeOpen=false, anytimeSeq=null; // add-a-task-anytime composer (drop a task into any open hour)
 const OVERRIDE_ENABLED=true; // permanent: tap a locked cell to override → marked, no XP
 let lastMorning=null; // tracks the day we've already fired the 9:00 morning popup for
 let modalDirty=true; // when true, the open modal needs a full rebuild; ticks alone won't rebuild it
@@ -690,6 +702,9 @@ function render(){
   if(dailyOpen){ if(modalDirty) renderDaily(); }
   document.getElementById("dailyOverlay").classList.toggle("hidden",!dailyOpen);
 
+  if(anytimeOpen){ if(modalDirty) renderAnytime(); }
+  document.getElementById("anytimeOverlay").classList.toggle("hidden",!anytimeOpen);
+
   modalDirty=false;
 }
 
@@ -836,6 +851,66 @@ function renderDaily(){
   m.querySelector("#dailyDone").onclick=()=>{ dailyOpen=false; render(); };
 }
 
+// ───────────────────────── add-a-task-anytime composer ─────────────────────────
+// Drop a task into ANY hour that hasn't locked yet — no need to wait for the :50
+// check-in or the 9:00 Morning window. Tasks added here are manual (non-recurring),
+// so they also satisfy the "must have a manual task" rule for hours 2–15.
+function renderAnytime(){
+  const m=document.getElementById("anytimeModal");
+  const stamp=dateStamp(now);
+  const curSeq=seqForHour(now.getHours());
+  const isLocked=s=>{ const st=statusOf(log[keyFor(stamp,s)]); return st==="locked-pass"||st==="locked-fail"||st==="overridden"; };
+  const closed=isDayClosed(stamp);
+  const openSeqs=[]; for(let s=1;s<=TOTAL_SEQUENCES;s++){ if(!isLocked(s)) openSeqs.push(s); }
+
+  // resolve which sequence is selected (default: current hour if open, else next open)
+  let sel=anytimeSeq;
+  if(sel===null || !openSeqs.includes(sel)){
+    sel=null;
+    if(curSeq && !isLocked(curSeq)) sel=curSeq;
+    else { for(const s of openSeqs){ if(curSeq===null || s>=curSeq){ sel=s; break; } } }
+    if(sel===null && openSeqs.length) sel=openSeqs[0];
+    anytimeSeq=sel;
+  }
+
+  let h='<div class="histHead"><span class="histTitle">ADD A TASK</span></div>';
+  h+='<div class="mSub" style="margin-top:-8px">Drop a task into any hour that hasn\'t locked yet — no waiting for the :50 check-in.</div>';
+
+  if(closed || openSeqs.length===0){
+    h+='<div class="empty">'+(closed?"The day is closed — no more tasks can be added today.":"Every hour is already locked.")+'</div>';
+    h+='<button class="primary" id="anytimeDone">Done</button>';
+    m.innerHTML=h; m.querySelector("#anytimeDone").onclick=()=>{ anytimeOpen=false; render(); }; return;
+  }
+
+  h+='<div style="font-family:\'DM Mono\',monospace;font-size:11px;letter-spacing:1.5px;color:var(--muted);margin-bottom:6px">WHICH HOUR</div>';
+  h+='<select class="hourSel" id="anytimeSel">';
+  for(let s=1;s<=TOTAL_SEQUENCES;s++){ const lk=isLocked(s);
+    h+='<option value="'+s+'"'+(lk?' disabled':'')+(s===sel?' selected':'')+'>'+seqName(s)+' · '+fmtHour(hourForSeq(s))+(s===curSeq?' · now':'')+(lk?' · locked':'')+'</option>'; }
+  h+='</select>';
+
+  const e=log[keyFor(stamp,sel)]; const tasks=(e&&e.planned)||[];
+  h+='<div style="margin-top:14px">';
+  if(tasks.length===0) h+='<div class="empty" style="padding:6px 0">No tasks here yet.</div>';
+  else tasks.forEach((t,i)=>{ h+='<div class="planRow"><span class="dot" style="background:'+(t.recurring?'var(--muted)':'var(--accent)')+'"></span><span class="rowText" style="font-size:15px">'+escapeHtml(t.text)+(t.recurring?' <span style="font-family:\'DM Mono\',monospace;font-size:10px;color:var(--muted)">recurring</span>':'')+'</span><button class="del" data-aremove="'+i+'">×</button></div>'; });
+  h+='</div>';
+  h+='<div class="inputRow"><input class="input" id="adraft" placeholder="Add a task to '+escapeHtml(seqName(sel))+'…" /><button class="add" id="aaddBtn">Add</button></div>';
+  h+='<button class="primary" id="anytimeDone">Done</button>';
+  m.innerHTML=h;
+
+  const selEl=document.getElementById("anytimeSel");
+  if(selEl) selEl.onchange=()=>{ anytimeSeq=+selEl.value; modalDirty=true; render(); };
+  const ad=document.getElementById("adraft"), ab=document.getElementById("aaddBtn");
+  function addA(){ const v=((ad&&ad.value)||"").trim(); if(!v)return; const k=keyFor(stamp,sel);
+    if(log[k]&&log[k].locked) return;
+    if(!log[k])log[k]={planned:[],locked:false,passed:false};
+    log[k].planned.push({text:v,done:false}); persist(); modalDirty=true; render();
+    setTimeout(()=>{const a=document.getElementById("adraft"); if(a)a.focus();},0); }
+  if(ab) ab.onclick=addA; if(ad) ad.onkeydown=ev=>{ if(ev.key==="Enter") addA(); };
+  m.querySelectorAll("[data-aremove]").forEach(b=>b.onclick=()=>{ const i=+b.dataset.aremove; const k=keyFor(stamp,sel); const en=log[k];
+    if(en && !en.locked){ en.planned.splice(i,1); persist(); modalDirty=true; render(); } });
+  m.querySelector("#anytimeDone").onclick=()=>{ anytimeOpen=false; render(); };
+}
+
 
 // ───────────────────────── wire static buttons ─────────────────────────
 document.getElementById("checkinBtn").onclick=()=>{
@@ -851,6 +926,8 @@ document.getElementById("dailyBtn").onclick=()=>{ dailyOpen=true; modalDirty=tru
 document.getElementById("checkinOverlay").onclick=e=>{ if(e.target.id==="checkinOverlay"){ checkinOpen=false; render(); } };
 document.getElementById("histOverlay").onclick=e=>{ if(e.target.id==="histOverlay"){ histOpen=false; render(); } };
 document.getElementById("dailyOverlay").onclick=e=>{ if(e.target.id==="dailyOverlay"){ dailyOpen=false; render(); } };
+document.getElementById("anytimeBtn").onclick=()=>{ anytimeSeq=null; anytimeOpen=true; modalDirty=true; render(); };
+document.getElementById("anytimeOverlay").onclick=e=>{ if(e.target.id==="anytimeOverlay"){ anytimeOpen=false; render(); } };
 
 // reckoning button: locked for 5s so you have to sit with it, then dismisses
 let reckTimer=null;
